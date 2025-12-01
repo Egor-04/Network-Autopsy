@@ -3,6 +3,15 @@ apply plugin: 'com.android.library'
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
+    
+    // днаюбэре щрх гюбхяхлнярх онд щрни ярпнйни:
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.core:core-ktx:1.10.1'
+    implementation 'androidx.annotation:annotation:1.6.0'
+    
+    // дКЪ ПЮАНРШ Я ЯЕРЭЧ (НОЖХНМЮКЭМН)
+    // implementation 'com.squareup.okhttp3:okhttp:4.11.0'
+    
 **DEPS**}
 
 android {
@@ -19,6 +28,10 @@ android {
     defaultConfig {
         minSdkVersion **MINSDKVERSION**
         targetSdkVersion **TARGETSDKVERSION**
+        
+        // днаюбэре щрс ярпнйс дкъ бюьецн JAVA йкюяяю:
+        multiDexEnabled true
+        
         ndk {
             abiFilters **ABIFILTERS**
         }
@@ -34,7 +47,16 @@ android {
     aaptOptions {
         noCompress = **BUILTIN_NOCOMPRESS** + unityStreamingAssets.tokenize(', ')
         ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~"
-    }**PACKAGING_OPTIONS**
+    }
+    
+    // днаюбэре щрнр акнй дкъ йнлохкъжхх JAVA тюикнб:
+    sourceSets {
+        main {
+            java.srcDirs = ['src/main/java', '../../java']
+        }
+    }
+    
+**PACKAGING_OPTIONS**
 }
 **IL_CPP_BUILD_SETUP**
 **SOURCE_BUILD_SETUP**

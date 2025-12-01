@@ -5,7 +5,6 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
-import android.net.NetworkRequest;
 import android.os.Build;
 import android.util.Log;
 import java.net.InetAddress;
@@ -14,19 +13,16 @@ import java.util.Collections;
 import java.util.List;
 
 public class NetworkDiagnostic {
-    
-    private static final String TAG = "UnityNetworkDiagnostic"; // ДОБАВЬТЕ КАВЫЧКИ!
+    private static final String TAG = "NetworkDiagnostic";
     private Context unityContext;
     private ConnectivityManager connectivityManager;
     
-    // Конструктор
     public NetworkDiagnostic(Context context) {
         this.unityContext = context;
         this.connectivityManager = (ConnectivityManager) 
             context.getSystemService(Context.CONNECTIVITY_SERVICE);
     }
     
-    // 1. Проверка базовой доступности сети
     public String checkBasicConnectivity() {
         try {
             if (connectivityManager == null) {
@@ -51,7 +47,6 @@ public class NetworkDiagnostic {
         }
     }
     
-    // 2. Проверка доступности интернета (не просто сети)
     public String checkInternetAccess() {
         StringBuilder result = new StringBuilder();
         
@@ -84,7 +79,6 @@ public class NetworkDiagnostic {
         return result.toString();
     }
     
-    // 3. Получение IP адресов
     public String getIPAddresses() {
         StringBuilder result = new StringBuilder();
         
@@ -115,7 +109,6 @@ public class NetworkDiagnostic {
         return result.toString().isEmpty() ? "No IP addresses found" : result.toString();
     }
     
-    // 4. Расширенная диагностика
     public String runFullDiagnostic() {
         StringBuilder report = new StringBuilder();
         report.append("=== NETWORK DIAGNOSTIC REPORT ===\n\n");
@@ -135,15 +128,47 @@ public class NetworkDiagnostic {
         
         report.append("\n=== END REPORT ===");
         
-        // Логируем в logcat
         Log.i(TAG, report.toString());
         
         return report.toString();
     }
     
-    // 5. Вспомогательный метод для Unity (статический вызов)
     public static String quickDiagnose(Context context) {
         NetworkDiagnostic diagnostic = new NetworkDiagnostic(context);
         return diagnostic.runFullDiagnostic();
     }
+
+public String testConnectionSpeed() {
+    try {
+        long startTime = System.currentTimeMillis();
+        InetAddress address = InetAddress.getByName("8.8.8.8");
+        boolean reachable = address.isReachable(3000);
+        long endTime = System.currentTimeMillis();
+        
+        StringBuilder result = new StringBuilder();
+        result.append("Ping Test (8.8.8.8): ").append(reachable ? "REACHABLE" : "UNREACHABLE").append("\n");
+        result.append("Response Time: ").append(endTime - startTime).append(" ms\n");
+        
+        return result.toString();
+    } catch (Exception e) {
+        return "ERROR in speed test: " + e.getMessage();
+    }
+}
+
+public String testDNS() {
+    StringBuilder result = new StringBuilder();
+    
+    String[] testDomains = {"google.com", "youtube.com", "github.com", "stackoverflow.com"};
+    
+    for (String domain : testDomains) {
+        try {
+            InetAddress address = InetAddress.getByName(domain);
+            result.append(domain).append(": ").append(address.getHostAddress()).append("\n");
+        } catch (Exception e) {
+            result.append(domain).append(": FAILED\n");
+        }
+    }
+    
+    return result.toString();
+}
 }

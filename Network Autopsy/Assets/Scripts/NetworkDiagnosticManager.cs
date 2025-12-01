@@ -1,6 +1,7 @@
-using UnityEngine;
-using System.IO;
+Ôªøusing System.IO;
+using System.Text;
 using TMPro;
+using UnityEngine;
 
 namespace NetworkDiagnostic
 {
@@ -10,70 +11,53 @@ namespace NetworkDiagnostic
         public class UISettings
         {
             [SerializeField] private bool useUI = true;
-            [SerializeField] private TMP_Text resultText;
+            [SerializeField] private TMP_Text diagnosticText;
+            [SerializeField] private TMP_Text summaryText;
             [SerializeField] private TMP_Text statusText;
             [SerializeField] private TMP_Text timestampText;
-            [SerializeField] private TMP_Text deviceInfoText;
-            [SerializeField] private UnityEngine.UI.Button runButton;
-            [SerializeField] private UnityEngine.UI.Button exportButton;
+            [SerializeField] private UnityEngine.UI.Button diagnoseButton;
+            [SerializeField] private UnityEngine.UI.Button saveButton;
             [SerializeField] private UnityEngine.UI.Button clearButton;
             [SerializeField] private UnityEngine.UI.ScrollRect scrollView;
-            [SerializeField] private GameObject loadingIndicator;
+            [SerializeField] private GameObject loadingPanel;
 
             public bool UseUI => useUI;
-            public TMP_Text ResultText => resultText;
+            public TMP_Text DiagnosticText => diagnosticText;
+            public TMP_Text SummaryText => summaryText;
             public TMP_Text StatusText => statusText;
             public TMP_Text TimestampText => timestampText;
-            public TMP_Text DeviceInfoText => deviceInfoText;
-            public UnityEngine.UI.Button RunButton => runButton;
-            public UnityEngine.UI.Button ExportButton => exportButton;
+            public UnityEngine.UI.Button DiagnoseButton => diagnoseButton;
+            public UnityEngine.UI.Button SaveButton => saveButton;
             public UnityEngine.UI.Button ClearButton => clearButton;
             public UnityEngine.UI.ScrollRect ScrollView => scrollView;
-            public GameObject LoadingIndicator => loadingIndicator;
+            public GameObject LoadingPanel => loadingPanel;
         }
 
         [System.Serializable]
         public class DiagnosticSettings
         {
-            [SerializeField] private bool runOnStart = true;
-            [SerializeField] private bool autoRefresh = false;
-            [SerializeField] private float refreshInterval = 30f;
-            [SerializeField] private bool saveToFile = true;
+            [SerializeField] private bool autoDiagnoseOnStart = true;
+            [SerializeField] private bool saveReports = true;
             [SerializeField] private bool showNotifications = true;
+            [SerializeField] private bool useAdvancedDiagnostics = true;
+            [SerializeField] private float autoRefreshInterval = 0f;
 
-            public bool RunOnStart => runOnStart;
-            public bool AutoRefresh => autoRefresh;
-            public float RefreshInterval => refreshInterval;
-            public bool SaveToFile => saveToFile;
+            public bool AutoDiagnoseOnStart => autoDiagnoseOnStart;
+            public bool SaveReports => saveReports;
             public bool ShowNotifications => showNotifications;
+            public bool UseAdvancedDiagnostics => useAdvancedDiagnostics;
+            public float AutoRefreshInterval => autoRefreshInterval;
         }
 
-        [System.Serializable]
-        public class ColorSettings
-        {
-            [SerializeField] private Color successColor = Color.green;
-            [SerializeField] private Color warningColor = Color.yellow;
-            [SerializeField] private Color errorColor = Color.red;
-            [SerializeField] private Color normalColor = Color.white;
-
-            public Color SuccessColor => successColor;
-            public Color WarningColor => warningColor;
-            public Color ErrorColor => errorColor;
-            public Color NormalColor => normalColor;
-        }
-
-        [Header("UI Configuration")]
+        [Header("UI Settings")]
         [SerializeField] private UISettings uiSettings = new UISettings();
 
-        [Header("Diagnostic Configuration")]
+        [Header("Diagnostic Settings")]
         [SerializeField] private DiagnosticSettings diagnosticSettings = new DiagnosticSettings();
 
-        [Header("Color Configuration")]
-        [SerializeField] private ColorSettings colorSettings = new ColorSettings();
-
         private string lastReport = "";
+        private bool isDiagnosing = false;
         private float refreshTimer = 0f;
-        private bool isRunning = false;
 
         #region Unity Lifecycle
 
@@ -81,32 +65,32 @@ namespace NetworkDiagnostic
         {
             InitializeUI();
 
-            if (diagnosticSettings.RunOnStart)
+            if (diagnosticSettings.AutoDiagnoseOnStart)
             {
-                RunDiagnostic();
+                StartDiagnostic();
             }
 
-            if (diagnosticSettings.AutoRefresh)
+            if (diagnosticSettings.AutoRefreshInterval > 0)
             {
-                refreshTimer = diagnosticSettings.RefreshInterval;
+                refreshTimer = diagnosticSettings.AutoRefreshInterval;
             }
         }
 
         private void Update()
         {
-            if (diagnosticSettings.AutoRefresh && !isRunning)
+            if (Input.GetKeyDown(KeyCode.D))
+            {
+                StartDiagnostic();
+            }
+
+            if (diagnosticSettings.AutoRefreshInterval > 0 && !isDiagnosing)
             {
                 refreshTimer -= Time.deltaTime;
                 if (refreshTimer <= 0f)
                 {
-                    RunDiagnostic();
-                    refreshTimer = diagnosticSettings.RefreshInterval;
+                    StartDiagnostic();
+                    refreshTimer = diagnosticSettings.AutoRefreshInterval;
                 }
-            }
-
-            if (Input.GetKeyDown(KeyCode.T))
-            {
-                RunDiagnostic();
             }
         }
 
@@ -114,39 +98,41 @@ namespace NetworkDiagnostic
 
         #region Public Methods
 
-        public void RunDiagnostic()
+        public void StartDiagnostic()
         {
-            if (isRunning) return;
+            if (isDiagnosing) return;
 
-            isRunning = true;
+            isDiagnosing = true;
             ShowLoading(true);
-            UpdateStatus("Running diagnostic...", colorSettings.WarningColor);
+            UpdateStatus("Starting network diagnostic...");
+            UpdateTimestamp();
 
-            Debug.Log("=== FULL NETWORK DIAGNOSTIC ===");
+            Debug.Log("=== STARTING NETWORK DIAGNOSTIC ===");
 
 #if UNITY_ANDROID && !UNITY_EDITOR
             RunAndroidDiagnostic();
 #else
-            HandleResult("Diagnostic available only on Android devices");
+            ShowEditorDiagnostic();
 #endif
         }
 
-        public void ExportLastReport()
+        public void SaveCurrentReport()
         {
             if (string.IsNullOrEmpty(lastReport))
             {
-                ShowNotification("No report to export", colorSettings.WarningColor);
+                ShowNotification("No data to save");
                 return;
             }
 
-            ExportReportToFile(lastReport);
+            SaveReportToFile(lastReport);
         }
 
         public void ClearResults()
         {
             lastReport = "";
-            UpdateResultText("");
-            UpdateStatus("Results cleared", colorSettings.NormalColor);
+            UpdateDiagnosticText("");
+            UpdateStatus("Results cleared");
+            ShowNotification("Results cleared");
         }
 
         #endregion
@@ -157,14 +143,14 @@ namespace NetworkDiagnostic
         {
             if (!uiSettings.UseUI) return;
 
-            if (uiSettings.RunButton != null)
+            if (uiSettings.DiagnoseButton != null)
             {
-                uiSettings.RunButton.onClick.AddListener(RunDiagnostic);
+                uiSettings.DiagnoseButton.onClick.AddListener(StartDiagnostic);
             }
 
-            if (uiSettings.ExportButton != null)
+            if (uiSettings.SaveButton != null)
             {
-                uiSettings.ExportButton.onClick.AddListener(ExportLastReport);
+                uiSettings.SaveButton.onClick.AddListener(SaveCurrentReport);
             }
 
             if (uiSettings.ClearButton != null)
@@ -173,7 +159,6 @@ namespace NetworkDiagnostic
             }
 
             UpdateTimestamp();
-            UpdateDeviceInfo();
         }
 
 #if UNITY_ANDROID && !UNITY_EDITOR
@@ -185,169 +170,219 @@ namespace NetworkDiagnostic
                 AndroidJavaObject activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity");
                 AndroidJavaObject context = activity.Call<AndroidJavaObject>("getApplicationContext");
                 
-                AndroidJavaObject diagnostic = new AndroidJavaObject(
-                    "com.UnknownGameStudio.NetworkAutopsy.NetworkDiagnostic",
-                    context
+                string result;
+                
+                // –í–°–ï–ì–î–ê –∏—Å–ø–æ–ª—å–∑—É–µ–º AdvancedNetworkDiagnostic
+                AndroidJavaClass diagnosticClass = new AndroidJavaClass(
+                    "com.UnknownGameStudio.NetworkAutopsy.AdvancedNetworkDiagnostic"
                 );
                 
-                string basic = diagnostic.Call<string>("checkBasicConnectivity");
-                string internet = diagnostic.Call<string>("checkInternetAccess");
-                string ips = diagnostic.Call<string>("getIPAddresses");
-                string fullReport = diagnostic.Call<string>("runFullDiagnostic");
+                // –í—ã–∑—ã–≤–∞–µ–º —Å—Ç–∞—Ç–∏—á–µ—Å–∫–∏–π –º–µ—Ç–æ–¥
+                result = diagnosticClass.CallStatic<string>("quickDiagnose", context);
                 
-                HandleResult(fullReport);
+                ProcessDiagnosticResult(result);
             }
             catch (System.Exception e)
             {
-                string errorMessage = $"ERROR: {e.Message}\nStackTrace: {e.StackTrace}";
-                Debug.LogError(errorMessage);
-                HandleResult(errorMessage);
+                string errorMessage = FormatErrorMessage(e);
+                ProcessDiagnosticResult(errorMessage);
             }
         }
 #endif
 
-        private void HandleResult(string result)
+        private string FormatErrorMessage(System.Exception e)
+        {
+            StringBuilder error = new StringBuilder();
+            error.AppendLine("========================================");
+            error.AppendLine("DIAGNOSTIC ERROR");
+            error.AppendLine("========================================");
+            error.AppendLine();
+            error.AppendLine("Error type: " + e.GetType().Name);
+            error.AppendLine("Message: " + e.Message);
+            error.AppendLine();
+            error.AppendLine("Recommendations:");
+            error.AppendLine("- Check app permissions");
+            error.AppendLine("- Restart the app");
+            error.AppendLine("- Update the app");
+            error.AppendLine("========================================");
+
+            return error.ToString();
+        }
+
+        private void ShowEditorDiagnostic()
+        {
+            StringBuilder mockResult = new StringBuilder();
+            mockResult.AppendLine("========================================");
+            mockResult.AppendLine("NETWORK DIAGNOSTIC (EDITOR)");
+            mockResult.AppendLine("========================================");
+            mockResult.AppendLine();
+            mockResult.AppendLine("1. BASIC INFORMATION:");
+            mockResult.AppendLine("----------------------------------------");
+            mockResult.AppendLine("[STATUS] CONNECTED (simulation)");
+            mockResult.AppendLine("[TYPE] Wi-Fi");
+            mockResult.AppendLine("[SIGNAL] Good (simulation)");
+            mockResult.AppendLine();
+
+            mockResult.AppendLine("2. CONNECTION DETAILS:");
+            mockResult.AppendLine("----------------------------------------");
+            mockResult.AppendLine("IPv4: 192.168.1.100 (interface: wlan0)");
+            mockResult.AppendLine("IPv6: fe80::abcd:1234 (interface: wlan0)");
+            mockResult.AppendLine("DNS servers:");
+            mockResult.AppendLine("  - 8.8.8.8");
+            mockResult.AppendLine("  - 1.1.1.1");
+            mockResult.AppendLine();
+
+            mockResult.AppendLine("3. DETECTED ISSUES:");
+            mockResult.AppendLine("----------------------------------------");
+            mockResult.AppendLine("[WARNING] VPN detected (simulation)");
+            mockResult.AppendLine("[WARNING] High ping: 250 ms");
+            mockResult.AppendLine("[SUCCESS] No critical issues");
+            mockResult.AppendLine();
+
+            mockResult.AppendLine("4. RECOMMENDATIONS:");
+            mockResult.AppendLine("----------------------------------------");
+            mockResult.AppendLine("- Check VPN settings");
+            mockResult.AppendLine("- Try different DNS");
+            mockResult.AppendLine("- Restart router");
+            mockResult.AppendLine();
+
+            mockResult.AppendLine("5. AVAILABILITY TESTS:");
+            mockResult.AppendLine("----------------------------------------");
+            mockResult.AppendLine("[OK] Google: working");
+            mockResult.AppendLine("[OK] YouTube: working");
+            mockResult.AppendLine("[OK] VK: working");
+            mockResult.AppendLine("[OK] Yandex: working");
+            mockResult.AppendLine("[OK] GitHub: working");
+            mockResult.AppendLine();
+            mockResult.AppendLine("========================================");
+            mockResult.AppendLine("DIAGNOSTIC COMPLETED");
+            mockResult.AppendLine("========================================");
+
+            ProcessDiagnosticResult(mockResult.ToString());
+        }
+
+        private void ProcessDiagnosticResult(string result)
         {
             lastReport = result;
 
-            if (diagnosticSettings.SaveToFile)
+            DisplayResults(result);
+
+            if (diagnosticSettings.SaveReports)
             {
                 SaveReportToFile(result);
             }
 
-            if (uiSettings.UseUI)
-            {
-                UpdateResultText(result);
-                UpdateStatus("Diagnostic complete", colorSettings.SuccessColor);
+            UpdateStatus("Diagnostic completed");
+            UpdateSummary(ExtractSummary(result));
 
-                bool hasErrors = result.Contains("ERROR") || result.Contains("FAILED");
-                UpdateStatus("Diagnostic complete" + (hasErrors ? " with errors" : ""),
-                           hasErrors ? colorSettings.ErrorColor : colorSettings.SuccessColor);
-            }
+            ShowLoading(false);
+            isDiagnosing = false;
 
             if (diagnosticSettings.ShowNotifications)
             {
-                ShowNotification("Diagnostic complete", colorSettings.SuccessColor);
+                ShowNotification("Diagnostic completed");
             }
-
-            ShowLoading(false);
-            isRunning = false;
         }
 
-        private void SaveReportToFile(string content)
+        private void DisplayResults(string result)
+        {
+            if (!uiSettings.UseUI) return;
+
+            UpdateDiagnosticText(result);
+
+            if (uiSettings.ScrollView != null)
+            {
+                Canvas.ForceUpdateCanvases();
+                uiSettings.ScrollView.verticalNormalizedPosition = 0f;
+            }
+        }
+
+        private string ExtractSummary(string report)
+        {
+            // –ê–Ω–∞–ª–∏–∑–∏—Ä—É–µ–º –∞–Ω–≥–ª–∏–π—Å–∫–∏–π –æ—Ç—á–µ—Ç
+            if (report.Contains("[ERROR]") || report.Contains("ERROR"))
+            {
+                return "Critical errors detected";
+            }
+            else if (report.Contains("[WARNING]") || report.Contains("WARNING"))
+            {
+                return "Warnings detected";
+            }
+            else if (report.Contains("[GOOD]") || report.Contains("SUCCESS"))
+            {
+                return "Network working normally";
+            }
+            else if (report.Contains("BLOCKED"))
+            {
+                return "Blocking detected";
+            }
+
+            return "Diagnostic completed";
+        }
+
+        private void SaveReportToFile(string report)
         {
             try
             {
                 string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-                string filename = $"network_report_{timestamp}.txt";
+                string filename = $"network_diagnostic_{timestamp}.txt";
                 string path = Path.Combine(Application.persistentDataPath, filename);
 
-                File.WriteAllText(path, content);
-                Debug.Log($"Report saved to: {path}");
+                StringBuilder fullReport = new StringBuilder();
+                fullReport.AppendLine("NETWORK DIAGNOSTIC REPORT");
+                fullReport.AppendLine("==========================");
+                fullReport.AppendLine("Time: " + System.DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss"));
+                fullReport.AppendLine("Device: " + SystemInfo.deviceModel);
+                fullReport.AppendLine("OS: " + SystemInfo.operatingSystem);
+                fullReport.AppendLine("Unity version: " + Application.unityVersion);
+                fullReport.AppendLine();
+                fullReport.AppendLine(report);
 
-                if (uiSettings.UseUI && diagnosticSettings.ShowNotifications)
+                File.WriteAllText(path, fullReport.ToString());
+
+                Debug.Log("Report saved: " + path);
+
+                if (diagnosticSettings.ShowNotifications)
                 {
-                    ShowNotification($"Report saved: {Path.GetFileName(path)}", colorSettings.SuccessColor);
+                    ShowNotification("Report saved: " + filename);
                 }
             }
             catch (System.Exception e)
             {
-                Debug.LogWarning($"Could not save report: {e.Message}");
+                Debug.LogWarning("Error saving report: " + e.Message);
 
-                if (uiSettings.UseUI && diagnosticSettings.ShowNotifications)
+                if (diagnosticSettings.ShowNotifications)
                 {
-                    ShowNotification($"Save failed: {e.Message}", colorSettings.ErrorColor);
+                    ShowNotification("Save error: " + e.Message);
                 }
             }
         }
-
-        private void ExportReportToFile(string content)
-        {
-            try
-            {
-                string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-                string filename = $"network_export_{timestamp}.txt";
-                string path = Path.Combine(Application.persistentDataPath, filename);
-
-                File.WriteAllText(path, content);
-
-                if (uiSettings.UseUI)
-                {
-                    ShowNotification($"Exported: {Path.GetFileName(path)}", colorSettings.SuccessColor);
-                }
-
-                // Õ‡ Android ÏÓÊÌÓ ÓÚÍ˚Ú¸ ‰Ë‡ÎÓ„ "ÔÓ‰ÂÎËÚ¸Òˇ"
-#if UNITY_ANDROID
-                ShareFile(path);
-#endif
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError($"Export failed: {e.Message}");
-
-                if (uiSettings.UseUI)
-                {
-                    ShowNotification($"Export failed: {e.Message}", colorSettings.ErrorColor);
-                }
-            }
-        }
-
-#if UNITY_ANDROID
-        private void ShareFile(string filePath)
-        {
-            try
-            {
-                AndroidJavaClass intentClass = new AndroidJavaClass("android.content.Intent");
-                AndroidJavaObject intent = new AndroidJavaObject("android.content.Intent");
-
-                intent.Call<AndroidJavaObject>("setAction", intentClass.GetStatic<string>("ACTION_SEND"));
-                intent.Call<AndroidJavaObject>("setType", "text/plain");
-
-                AndroidJavaClass uriClass = new AndroidJavaClass("android.net.Uri");
-                AndroidJavaObject uri = uriClass.CallStatic<AndroidJavaObject>("parse", "file://" + filePath);
-                intent.Call<AndroidJavaObject>("putExtra", intentClass.GetStatic<string>("EXTRA_STREAM"), uri);
-                intent.Call<AndroidJavaObject>("putExtra", intentClass.GetStatic<string>("EXTRA_SUBJECT"), "Network Diagnostic Report");
-                intent.Call<AndroidJavaObject>("putExtra", intentClass.GetStatic<string>("EXTRA_TEXT"), "Network diagnostic report attached");
-
-                AndroidJavaClass unity = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
-                AndroidJavaObject currentActivity = unity.GetStatic<AndroidJavaObject>("currentActivity");
-
-                AndroidJavaObject chooser = intentClass.CallStatic<AndroidJavaObject>("createChooser",
-                    intent, "Share Network Report");
-                currentActivity.Call("startActivity", chooser);
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogWarning($"Share failed: {e.Message}");
-            }
-        }
-#endif
 
         #endregion
 
         #region UI Update Methods
 
-        private void UpdateResultText(string text)
+        private void UpdateDiagnosticText(string text)
         {
-            if (uiSettings.UseUI && uiSettings.ResultText != null)
+            if (uiSettings.UseUI && uiSettings.DiagnosticText != null)
             {
-                uiSettings.ResultText.text = text;
-
-                // ¿‚ÚÓÒÍÓÎÎ ‚ÌËÁ
-                if (uiSettings.ScrollView != null)
-                {
-                    Canvas.ForceUpdateCanvases();
-                    uiSettings.ScrollView.verticalNormalizedPosition = 0f;
-                }
+                uiSettings.DiagnosticText.text = text;
             }
         }
 
-        private void UpdateStatus(string message, Color color)
+        private void UpdateSummary(string text)
+        {
+            if (uiSettings.UseUI && uiSettings.SummaryText != null)
+            {
+                uiSettings.SummaryText.text = text;
+            }
+        }
+
+        private void UpdateStatus(string text)
         {
             if (uiSettings.UseUI && uiSettings.StatusText != null)
             {
-                uiSettings.StatusText.text = message;
-                uiSettings.StatusText.color = color;
+                uiSettings.StatusText.text = text;
             }
         }
 
@@ -355,44 +390,35 @@ namespace NetworkDiagnostic
         {
             if (uiSettings.UseUI && uiSettings.TimestampText != null)
             {
-                uiSettings.TimestampText.text = $"Last run: {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}";
-            }
-        }
-
-        private void UpdateDeviceInfo()
-        {
-            if (uiSettings.UseUI && uiSettings.DeviceInfoText != null)
-            {
-                string deviceInfo = $"Device: {SystemInfo.deviceModel}\n" +
-                                   $"OS: {SystemInfo.operatingSystem}\n" +
-                                   $"Unity: {Application.unityVersion}";
-                uiSettings.DeviceInfoText.text = deviceInfo;
+                uiSettings.TimestampText.text = "Updated: " +
+                    System.DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss");
             }
         }
 
         private void ShowLoading(bool show)
         {
-            if (uiSettings.UseUI && uiSettings.LoadingIndicator != null)
+            if (!uiSettings.UseUI) return;
+
+            if (uiSettings.LoadingPanel != null)
             {
-                uiSettings.LoadingIndicator.SetActive(show);
+                uiSettings.LoadingPanel.SetActive(show);
             }
 
-            if (uiSettings.UseUI && uiSettings.RunButton != null)
+            if (uiSettings.DiagnoseButton != null)
             {
-                uiSettings.RunButton.interactable = !show;
+                uiSettings.DiagnoseButton.interactable = !show;
             }
         }
 
-        private void ShowNotification(string message, Color color)
+        private void ShowNotification(string message)
         {
             if (!diagnosticSettings.ShowNotifications) return;
 
-            Debug.Log($"Notification: {message}");
+            Debug.Log("Notification: " + message);
 
             if (uiSettings.UseUI && uiSettings.StatusText != null)
             {
                 uiSettings.StatusText.text = message;
-                uiSettings.StatusText.color = color;
             }
         }
 

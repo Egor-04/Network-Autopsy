@@ -4,20 +4,13 @@ using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Networking;
 using UnityEngine.UI;
 
 namespace NetworkDiagnostic
 {
     public class NetworkDiagnosticManager : MonoBehaviour
     {
-        [System.Serializable]
-        public class DomainCheck
-        {
-            public string domain;
-            public string description;
-            public bool isBlockedTest;
-        }
-
         [Header("UI Elements")]
         [SerializeField] private TMP_Text outputText;
         [SerializeField] private ScrollRect scrollView;
@@ -25,54 +18,38 @@ namespace NetworkDiagnostic
         [SerializeField] private Slider progressSlider;
         [SerializeField] private TMP_Text progressText;
         [SerializeField] private GameObject loadingPanel;
-        [SerializeField] private Button addDomainButton;
-        [SerializeField] private TMP_InputField newDomainInput;
         [SerializeField] private Button saveReportButton;
-
-        [Header("Domain List")]
-        [SerializeField]
-        private List<DomainCheck> domainsToCheck = new List<DomainCheck>
-        {
-            new DomainCheck { domain = "google.com", description = "Google", isBlockedTest = false },
-            new DomainCheck { domain = "youtube.com", description = "YouTube", isBlockedTest = false },
-            new DomainCheck { domain = "vk.com", description = "VK", isBlockedTest = true },
-            new DomainCheck { domain = "telegram.org", description = "Telegram", isBlockedTest = true },
-            new DomainCheck { domain = "github.com", description = "GitHub", isBlockedTest = false },
-            new DomainCheck { domain = "rutracker.org", description = "RuTracker", isBlockedTest = true }
-        };
-
-        [Header("Protocol List")]
-        [SerializeField]
-        private List<string> protocolsToCheck = new List<string>
-        {
-            "HTTP (80)",
-            "HTTPS (443)",
-            "DNS (53)",
-            "FTP (21)",
-            "SSH (22)",
-            "SMTP (25)",
-            "POP3 (110)",
-            "IMAP (143)",
-            "RDP (3389)",
-            "OpenVPN (1194)",
-            "WireGuard (51820)",
-            "Tor (9050)",
-            "BitTorrent (6881)",
-            "QUIC (443)",
-            "WebSocket (80)"
-        };
 
         private StringBuilder report = new StringBuilder();
         private bool isRunning = false;
-        private Coroutine diagnosticCoroutine;
+        private float startDiagnosticTime;
+
+        // Структура для хранения результатов диагностики
+        private class DiagnosticResults
+        {
+            public string connectionType = "";
+            public string networkProvider = "";
+            public bool isVpnActive = false;
+            public string vpnProtocol = "";
+            public float downloadSpeed = 0f;
+            public float uploadSpeed = 0f;
+            public float ping = 0f;
+            public float packetLoss = 0f;
+            public bool youtubeBlocked = false;
+            public bool telegramBlocked = false;
+            public bool vkBlocked = false;
+            public List<string> blockedProtocols = new List<string>();
+            public List<string> blockedDomains = new List<string>();
+            public bool hasInternet = true;
+            public bool isRoaming = false;
+            public bool dpiDetected = false;
+            public bool sniBlocked = false;
+        }
 
         void Start()
         {
             if (startButton != null)
                 startButton.onClick.AddListener(StartDiagnostic);
-
-            if (addDomainButton != null)
-                addDomainButton.onClick.AddListener(AddNewDomain);
 
             if (saveReportButton != null)
                 saveReportButton.onClick.AddListener(SaveCurrentReport);
@@ -93,34 +70,15 @@ namespace NetworkDiagnostic
             isRunning = true;
             ShowLoading(true);
             ClearOutput();
-
-            if (diagnosticCoroutine != null)
-                StopCoroutine(diagnosticCoroutine);
-
-            diagnosticCoroutine = StartCoroutine(RunFullDiagnostic());
-        }
-
-        public void AddNewDomain()
-        {
-            if (string.IsNullOrEmpty(newDomainInput.text)) return;
-
-            string domain = newDomainInput.text.Trim();
-            domainsToCheck.Add(new DomainCheck
-            {
-                domain = domain,
-                description = domain,
-                isBlockedTest = false
-            });
-
-            newDomainInput.text = "";
-            AppendOutput($"Добавлен домен: {domain}\n");
+            StartCoroutine(RunFullDiagnostic());
         }
 
         public void SaveCurrentReport()
         {
             if (report.Length == 0)
             {
-                AppendOutput("Нет данных для сохранения\n");
+                report.Append("Нет данных для сохранения\n");
+                outputText.text = report.ToString();
                 return;
             }
 
@@ -130,247 +88,541 @@ namespace NetworkDiagnostic
         private IEnumerator RunFullDiagnostic()
         {
             report.Clear();
-            AppendOutput("=== ДИАГНОСТИКА СЕТИ ===\n\n");
+            report.Append("ПОЛНАЯ ДИАГНОСТИКА СЕТИ\n");
+            report.Append("==========================\n\n");
+            outputText.text = report.ToString();
+            startDiagnosticTime = Time.time;
 
-            // 1. Базовая информация
-            yield return StartCoroutine(CheckBasicNetworkInfo());
+            yield return null;
 
-            // 2. Скорость интернета
-            yield return StartCoroutine(CheckNetworkSpeed());
+            DiagnosticResults results = new DiagnosticResults();
 
-            // 3. Проверка доменов
-            yield return StartCoroutine(CheckDomains());
+#if UNITY_ANDROID && !UNITY_EDITOR
+            yield return StartCoroutine(RunAndroidDiagnostic(results));
+#else
+            yield return StartCoroutine(SimulateEditorDiagnostic(results));
+#endif
 
-            // 4. Проверка протоколов
-            yield return StartCoroutine(CheckProtocols());
-
-            // 5. Детальная диагностика
-            yield return StartCoroutine(DetailedDiagnostics());
-
-            AppendOutput("\n=== ДИАГНОСТИКА ЗАВЕРШЕНА ===\n");
+            // Формируем понятный отчет
+            yield return StartCoroutine(GenerateHumanReadableReport(results));
 
             SaveReport();
-
             ShowLoading(false);
             isRunning = false;
         }
 
-        private IEnumerator CheckBasicNetworkInfo()
+        private IEnumerator RunAndroidDiagnostic(DiagnosticResults results)
         {
-            UpdateProgress(10, "Получение информации о сети");
+            UpdateProgress(10, "Получение информации о сети...");
+            yield return null;
 
-            AppendOutput("1. ИНФОРМАЦИЯ О ПОДКЛЮЧЕНИИ:\n");
-            AppendOutput("------------------------------\n");
+            AndroidJavaObject context = null;
 
-#if UNITY_ANDROID && !UNITY_EDITOR
             try
             {
                 AndroidJavaClass unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
                 AndroidJavaObject activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity");
-                AndroidJavaObject context = activity.Call<AndroidJavaObject>("getApplicationContext");
-                
-                AndroidJavaClass networkInfo = new AndroidJavaClass("com.UnknownGameStudio.NetworkAutopsy.NetworkInfo");
-                string info = networkInfo.CallStatic<string>("getBasicInfo", context);
-                AppendOutput(info + "\n");
+                context = activity.Call<AndroidJavaObject>("getApplicationContext");
             }
             catch (System.Exception e)
             {
-                AppendOutput("[ERROR] " + e.Message + "\n");
+                report.Append($"[ОШИБКА] Не удалось получить доступ к Android: {e.Message}\n");
+                outputText.text = report.ToString();
+                yield break;
             }
-#else
-            AppendOutput("Тип подключения: Wi-Fi\n");
-            AppendOutput("Статус: Подключено\n");
-            AppendOutput("IP адрес: 192.168.1.100\n");
-            AppendOutput("Провайдер: Ростелеком (симуляция)\n");
-            AppendOutput("Страна: Россия\n");
-            AppendOutput("Город: Москва\n");
-#endif
 
-            yield return new WaitForSeconds(0.3f);
+            UpdateProgress(30, "Запуск диагностики...");
+            yield return null;
+
+            string javaReport = "";
+            yield return StartCoroutine(CallJavaDiagnostic(context, result => {
+                javaReport = result;
+            }));
+
+            // Парсим результаты из Java отчета
+            ParseJavaReport(javaReport, results);
+
+            UpdateProgress(70, "Проверка доступности сайтов...");
+            yield return null;
+
+            // Проверяем YouTube
+            yield return StartCoroutine(CheckWebsite("https://www.youtube.com", isBlocked => {
+                results.youtubeBlocked = !isBlocked;
+            }));
+
+            // Проверяем Telegram
+            yield return StartCoroutine(CheckWebsite("https://web.telegram.org", isBlocked => {
+                results.telegramBlocked = !isBlocked;
+            }));
+
+            // Проверяем VK
+            yield return StartCoroutine(CheckWebsite("https://vk.com", isBlocked => {
+                results.vkBlocked = !isBlocked;
+            }));
+
+            UpdateProgress(90, "Анализ результатов...");
+            yield return null;
         }
 
-        private IEnumerator CheckNetworkSpeed()
+        private IEnumerator CallJavaDiagnostic(AndroidJavaObject context, System.Action<string> onComplete)
         {
-            UpdateProgress(30, "Проверка скорости интернета");
+            string result = "";
 
-            AppendOutput("\n2. ТЕСТ СКОРОСТИ ИНТЕРНЕТА:\n");
-            AppendOutput("-----------------------------\n");
-
-#if UNITY_ANDROID && !UNITY_EDITOR
             try
             {
-                AndroidJavaClass speedTest = new AndroidJavaClass("com.UnknownGameStudio.NetworkAutopsy.SpeedTest");
-                
-                AppendOutput("Загрузка: ");
-                float downloadSpeed = speedTest.CallStatic<float>("testDownload");
-                AppendOutput(downloadSpeed.ToString("F1") + " Мбит/с\n");
-                
-                AppendOutput("Отдача: ");
-                float uploadSpeed = speedTest.CallStatic<float>("testUpload");
-                AppendOutput(uploadSpeed.ToString("F1") + " Мбит/с\n");
-                
-                AppendOutput("Пинг: ");
-                int ping = speedTest.CallStatic<int>("testPing", "8.8.8.8");
-                AppendOutput(ping + " мс\n");
-                
-                // Оценка
-                if (downloadSpeed < 1) AppendOutput("ОЦЕНКА: Очень медленно\n");
-                else if (downloadSpeed < 10) AppendOutput("ОЦЕНКА: Средняя скорость\n");
-                else if (downloadSpeed < 50) AppendOutput("ОЦЕНКА: Хорошая скорость\n");
-                else AppendOutput("ОЦЕНКА: Отличная скорость\n");
+                AndroidJavaClass diagnosticClass = new AndroidJavaClass(
+                    "com.UnknownGameStudio.NetworkAutopsy.AdvancedNetworkDiagnostic"
+                );
+
+                result = diagnosticClass.CallStatic<string>("quickDiagnose", context);
             }
             catch (System.Exception e)
             {
-                AppendOutput("[ERROR] " + e.Message + "\n");
-            }
-#else
-            AppendOutput("Загрузка: 47.3 Мбит/с (симуляция)\n");
-            AppendOutput("Отдача: 12.8 Мбит/с (симуляция)\n");
-            AppendOutput("Пинг: 24 мс (симуляция)\n");
-            AppendOutput("ОЦЕНКА: Отличная скорость\n");
-#endif
-
-            yield return new WaitForSeconds(0.5f);
-        }
-
-        private IEnumerator CheckDomains()
-        {
-            UpdateProgress(50, "Проверка доступности сайтов");
-
-            AppendOutput("\n3. ПРОВЕРКА ДОСТУПНОСТИ САЙТОВ:\n");
-            AppendOutput("---------------------------------\n");
-
-            int total = domainsToCheck.Count;
-            int checkedCount = 0;
-            int blockedCount = 0;
-
-            foreach (var domainCheck in domainsToCheck)
-            {
-                checkedCount++;
-                UpdateProgress(50 + (int)(30f * checkedCount / total),
-                    "Проверка " + domainCheck.domain);
-
-#if UNITY_ANDROID && !UNITY_EDITOR
-                try
-                {
-                    AndroidJavaClass checker = new AndroidJavaClass("com.UnknownGameStudio.NetworkAutopsy.DomainChecker");
-                    bool isAvailable = checker.CallStatic<bool>("checkDomain", domainCheck.domain);
-                    bool isBlocked = domainCheck.isBlockedTest && !isAvailable;
-                    
-                    string status = isAvailable ? "[OK]" : "[BLOCKED]";
-                    string description = isBlocked ? " (БЛОКИРОВКА!)" : "";
-                    
-                    AppendOutput(status + " " + domainCheck.description + 
-                        " (" + domainCheck.domain + ")" + description + "\n");
-                    
-                    if (isBlocked) blockedCount++;
-                }
-                catch
-                {
-                    AppendOutput("[ERROR] " + domainCheck.description + " (ошибка проверки)\n");
-                }
-#else
-                bool isBlocked = domainCheck.isBlockedTest &&
-                    (domainCheck.domain.Contains("vk") ||
-                     domainCheck.domain.Contains("telegram") ||
-                     domainCheck.domain.Contains("rutracker"));
-
-                string status = isBlocked ? "[BLOCKED]" : "[OK]";
-                string description = isBlocked ? " (БЛОКИРОВКА РКН)" : "";
-
-                AppendOutput(status + " " + domainCheck.description +
-                    " (" + domainCheck.domain + ")" + description + "\n");
-
-                if (isBlocked) blockedCount++;
-#endif
-
-                yield return new WaitForSeconds(0.1f);
+                result = $"[ОШИБКА] Диагностика не удалась: {e.Message}";
             }
 
-            AppendOutput("\nИТОГО: " + blockedCount + " из " + total + " сайтов заблокировано\n");
+            onComplete?.Invoke(result);
+            yield return null;
         }
 
-        private IEnumerator CheckProtocols()
+        private void ParseJavaReport(string javaReport, DiagnosticResults results)
         {
-            UpdateProgress(80, "Проверка протоколов");
-
-            AppendOutput("\n4. ПРОВЕРКА ПРОТОКОЛОВ:\n");
-            AppendOutput("-------------------------\n");
-
-            int total = protocolsToCheck.Count;
-            int checkedCount = 0;
-            int blockedCount = 0;
-
-            foreach (var protocol in protocolsToCheck)
-            {
-                checkedCount++;
-                UpdateProgress(80 + (int)(15f * checkedCount / total),
-                    "Проверка " + protocol);
-
-#if UNITY_ANDROID && !UNITY_EDITOR
-                try
-                {
-                    AndroidJavaClass protocolChecker = new AndroidJavaClass("com.UnknownGameStudio.NetworkAutopsy.ProtocolChecker");
-                    bool isBlocked = protocolChecker.CallStatic<bool>("checkProtocol", protocol);
-                    
-                    string status = isBlocked ? "[BLOCKED]" : "[OPEN]";
-                    AppendOutput(status + " " + protocol + "\n");
-                    
-                    if (isBlocked) blockedCount++;
-                }
-                catch
-                {
-                    AppendOutput("[ERROR] " + protocol + " (ошибка проверки)\n");
-                }
-#else
-                bool isBlocked = protocol.Contains("Tor") ||
-                                 protocol.Contains("BitTorrent") ||
-                                 protocol.Contains("OpenVPN");
-
-                string status = isBlocked ? "[BLOCKED]" : "[OPEN]";
-                string reason = isBlocked ? " (блокировка провайдера)" : "";
-
-                AppendOutput(status + " " + protocol + reason + "\n");
-
-                if (isBlocked) blockedCount++;
-#endif
-
-                yield return new WaitForSeconds(0.1f);
-            }
-
-            AppendOutput("\nИТОГО: " + blockedCount + " из " + total + " протоколов заблокировано\n");
-        }
-
-        private IEnumerator DetailedDiagnostics()
-        {
-            UpdateProgress(95, "Детальная диагностика");
-
-            AppendOutput("\n5. ДЕТАЛЬНАЯ ДИАГНОСТИКА:\n");
-            AppendOutput("---------------------------\n");
-
-#if UNITY_ANDROID && !UNITY_EDITOR
             try
             {
-                AndroidJavaClass diagnostic = new AndroidJavaClass("com.UnknownGameStudio.NetworkAutopsy.NetworkDiagnostic");
-                string details = diagnostic.CallStatic<string>("getDetailedInfo");
-                AppendOutput(details + "\n");
+                // Парсим тип подключения
+                if (javaReport.Contains("[TYPE] Wi-Fi"))
+                {
+                    results.connectionType = "Wi-Fi";
+                }
+                else if (javaReport.Contains("[TYPE] Mobile"))
+                {
+                    results.connectionType = "Мобильная сеть (LTE/4G/5G)";
+                }
+                else if (javaReport.Contains("[TYPE] VPN"))
+                {
+                    results.connectionType = "VPN";
+                    results.isVpnActive = true;
+                }
+
+                // Парсим VPN статус
+                if (javaReport.Contains("[VPN] ACTIVE") || javaReport.Contains("VPN connection active"))
+                {
+                    results.isVpnActive = true;
+                }
+
+                // Парсим потерю пакетов
+                if (javaReport.Contains("Packet loss:"))
+                {
+                    int start = javaReport.IndexOf("Packet loss:") + 12;
+                    int end = javaReport.IndexOf("%", start);
+                    if (end > start)
+                    {
+                        string lossStr = javaReport.Substring(start, end - start).Trim();
+                        if (float.TryParse(lossStr, out float loss))
+                        {
+                            results.packetLoss = loss;
+                        }
+                    }
+                }
+
+                // Парсим пинг
+                if (javaReport.Contains("Average ping:"))
+                {
+                    int start = javaReport.IndexOf("Average ping:") + 13;
+                    int end = javaReport.IndexOf("ms", start);
+                    if (end > start)
+                    {
+                        string pingStr = javaReport.Substring(start, end - start).Trim();
+                        if (float.TryParse(pingStr, out float ping))
+                        {
+                            results.ping = ping;
+                        }
+                    }
+                }
+
+                // Парсим скорость
+                if (javaReport.Contains("Download speed:"))
+                {
+                    int start = javaReport.IndexOf("Download speed:") + 15;
+                    int end = javaReport.IndexOf("Mbps", start);
+                    if (end > start)
+                    {
+                        string speedStr = javaReport.Substring(start, end - start).Trim();
+                        if (float.TryParse(speedStr, out float speed))
+                        {
+                            results.downloadSpeed = speed;
+                        }
+                    }
+                }
+
+                // Парсим скорость отдачи
+                if (javaReport.Contains("Upload speed:"))
+                {
+                    int start = javaReport.IndexOf("Upload speed:") + 13;
+                    int end = javaReport.IndexOf("Mbps", start);
+                    if (end > start)
+                    {
+                        string speedStr = javaReport.Substring(start, end - start).Trim();
+                        if (float.TryParse(speedStr, out float speed))
+                        {
+                            results.uploadSpeed = speed;
+                        }
+                    }
+                }
+
+                // Определяем провайдера по extra info
+                if (javaReport.Contains("[EXTRA INFO]"))
+                {
+                    int start = javaReport.IndexOf("[EXTRA INFO]") + 13;
+                    int end = javaReport.IndexOf("\n", start);
+                    if (end > start)
+                    {
+                        string extraInfo = javaReport.Substring(start, end - start).Trim();
+                        if (!string.IsNullOrEmpty(extraInfo) && extraInfo != "N/A")
+                        {
+                            results.networkProvider = extraInfo;
+                        }
+                    }
+                }
+
+                // Если провайдер не определился, ставим по умолчанию
+                if (string.IsNullOrEmpty(results.networkProvider))
+                {
+                    if (results.connectionType.Contains("Мобильная"))
+                        results.networkProvider = "Мобильный оператор";
+                    else
+                        results.networkProvider = "Локальный провайдер";
+                }
+
+                // Определяем протокол VPN (если есть)
+                if (javaReport.Contains("VPN Protocol:"))
+                {
+                    int start = javaReport.IndexOf("VPN Protocol:") + 13;
+                    int end = javaReport.IndexOf("\n", start);
+                    if (end > start)
+                    {
+                        results.vpnProtocol = javaReport.Substring(start, end - start).Trim();
+                    }
+                }
+
+                // Парсим DPI и SNI блокировки
+                if (javaReport.Contains("DPI Detection: [DETECTED]"))
+                {
+                    results.dpiDetected = true;
+                }
+
+                if (javaReport.Contains("SNI") && javaReport.Contains("[BLOCKED]"))
+                {
+                    results.sniBlocked = true;
+                }
+
+                // Ищем заблокированные протоколы
+                string[] protocolsToCheck = { "VLESS", "VMESS", "TROJAN", "SHADOWSOCKS", "WIREGUARD", "OPENVPN" };
+                foreach (var protocol in protocolsToCheck)
+                {
+                    if (javaReport.Contains($"[{protocol}]") &&
+                        (javaReport.Contains("BLOCKED") || javaReport.Contains("HEAVILY BLOCKED") || javaReport.Contains("PARTIALLY BLOCKED")))
+                    {
+                        results.blockedProtocols.Add(protocol);
+                    }
+                }
+
+                // Ищем заблокированные домены
+                if (javaReport.Contains("rutracker.org") && javaReport.Contains("BLOCKED"))
+                {
+                    results.blockedDomains.Add("RuTracker");
+                }
+                if (javaReport.Contains("vk.com") && javaReport.Contains("BLOCKED"))
+                {
+                    results.blockedDomains.Add("ВКонтакте");
+                }
+                if (javaReport.Contains("telegram.org") && javaReport.Contains("BLOCKED"))
+                {
+                    results.blockedDomains.Add("Telegram");
+                }
+
+                report.Append("Получены данные от системы\n");
             }
             catch (System.Exception e)
             {
-                AppendOutput("[ERROR] " + e.Message + "\n");
+                report.Append($"[ОШИБКА] Не удалось разобрать отчет: {e.Message}\n");
             }
-#else
-            AppendOutput("VPN обнаружено: Нет\n");
-            AppendOutput("Прокси обнаружено: Нет\n");
-            AppendOutput("Пакетная потеря: 0.2%\n");
-            AppendOutput("Джиттер: 5 мс\n");
-            AppendOutput("Максимальный пинг: 87 мс\n");
-            AppendOutput("DNS утечки: Нет\n");
-            AppendOutput("WebRTC утечки: Нет\n");
-            AppendOutput("IPv6 доступен: Да\n");
-#endif
 
+            outputText.text = report.ToString();
+        }
+
+        private IEnumerator CheckWebsite(string url, System.Action<bool> onComplete)
+        {
+            bool isAccessible = false;
+            UnityWebRequest www = UnityWebRequest.Head(url);
+            www.timeout = 5;
+
+            var operation = www.SendWebRequest();
+            float startTime = Time.time;
+
+            while (!operation.isDone && Time.time - startTime < 6f)
+            {
+                yield return null;
+            }
+
+            if (www.result == UnityWebRequest.Result.Success)
+            {
+                isAccessible = true;
+            }
+
+            www.Dispose();
+            onComplete?.Invoke(isAccessible);
+        }
+
+        private IEnumerator GenerateHumanReadableReport(DiagnosticResults results)
+        {
+            UpdateProgress(95, "Формирование отчета...");
+
+            report.Append("\nРЕЗУЛЬТАТЫ ДИАГНОСТИКИ\n");
+            report.Append("==========================\n\n");
+
+            // 1. Основная информация о подключении
+            report.Append("1. ТИП ПОДКЛЮЧЕНИЯ:\n");
+            report.Append("-------------------\n");
+            report.Append($"• Тип сети: {results.connectionType}\n");
+            report.Append($"• Провайдер: {results.networkProvider}\n");
+            report.Append($"• Роуминг: {(results.isRoaming ? "Да" : "Нет")}\n");
+            report.Append($"• VPN: {(results.isVpnActive ? "Активен" : "Не активен")}\n");
+            if (results.isVpnActive && !string.IsNullOrEmpty(results.vpnProtocol))
+            {
+                report.Append($"• Протокол VPN: {results.vpnProtocol}\n");
+            }
+            report.Append("\n");
+
+            // 2. Скорость интернета
+            report.Append("2. СКОРОСТЬ ИНТЕРНЕТА:\n");
+            report.Append("-------------------\n");
+            report.Append($"• Загрузка: {results.downloadSpeed:F1} Мбит/с\n");
+            report.Append($"• Отдача: {results.uploadSpeed:F1} Мбит/с\n");
+            report.Append($"• Пинг: {results.ping:F0} мс\n");
+
+            // Оценка скорости
+            string speedRating = "";
+            if (results.downloadSpeed < 5) speedRating = "Медленно";
+            else if (results.downloadSpeed < 20) speedRating = "Средняя";
+            else if (results.downloadSpeed < 100) speedRating = "Быстрая";
+            else speedRating = "Очень быстрая";
+
+            report.Append($"• Оценка: {speedRating}\n");
+            report.Append("\n");
+
+            // 3. Качество соединения
+            report.Append("3. КАЧЕСТВО СОЕДИНЕНИЯ:\n");
+            report.Append("-------------------\n");
+            report.Append($"• Потеря пакетов: {results.packetLoss:F1}%\n");
+
+            string packetLossRating = "";
+            if (results.packetLoss < 1) packetLossRating = "Отличное";
+            else if (results.packetLoss < 5) packetLossRating = "Хорошее";
+            else if (results.packetLoss < 10) packetLossRating = "Среднее";
+            else packetLossRating = "Плохое";
+
+            report.Append($"• Стабильность: {packetLossRating}\n");
+            report.Append("\n");
+
+            // 4. Доступность сайтов
+            report.Append("4. ДОСТУПНОСТЬ САЙТОВ:\n");
+            report.Append("-------------------\n");
+            report.Append($"• YouTube: {(results.youtubeBlocked ? "Заблокирован" : "Доступен")}\n");
+            report.Append($"• Telegram: {(results.telegramBlocked ? "Заблокирован" : "Доступен")}\n");
+            report.Append($"• ВКонтакте: {(results.vkBlocked ? "Заблокирован" : "Доступен")}\n");
+
+            if (results.blockedDomains.Count > 0)
+            {
+                report.Append($"• Заблокировано по РКН: {string.Join(", ", results.blockedDomains)}\n");
+            }
+            report.Append("\n");
+
+            // 5. Блокировка VPN протоколов
+            report.Append("5. БЛОКИРОВКА VPN ПРОТОКОЛОВ:\n");
+            report.Append("-------------------\n");
+
+            if (results.blockedProtocols.Count > 0)
+            {
+                report.Append($"• Заблокированные протоколы: {string.Join(", ", results.blockedProtocols)}\n");
+            }
+            else
+            {
+                report.Append("• VPN протоколы не блокируются\n");
+            }
+
+            if (results.dpiDetected)
+            {
+                report.Append("• Обнаружена система DPI (глубокая проверка пакетов)\n");
+            }
+
+            if (results.sniBlocked)
+            {
+                report.Append("• Обнаружена SNI-блокировка (блокировка по имени домена)\n");
+            }
+            report.Append("\n");
+
+            // 6. ЗАКЛЮЧЕНИЕ И РЕКОМЕНДАЦИИ
+            report.Append("6. ЗАКЛЮЧЕНИЕ:\n");
+            report.Append("-------------------\n");
+
+            List<string> issues = new List<string>();
+            List<string> recommendations = new List<string>();
+
+            // Проверяем проблемы со скоростью
+            if (results.downloadSpeed < 5)
+            {
+                issues.Add("Очень низкая скорость интернета");
+                recommendations.Add("Попробуйте переключиться на другую сеть (Wi-Fi/мобильную)");
+                recommendations.Add("Перезагрузите роутер или модем");
+            }
+            else if (results.downloadSpeed < 20 && results.connectionType.Contains("Wi-Fi"))
+            {
+                issues.Add("Низкая скорость Wi-Fi соединения");
+                recommendations.Add("Подойдите ближе к роутеру");
+                recommendations.Add("Проверьте, не перегружена ли Wi-Fi сеть");
+            }
+
+            // Проверяем потерю пакетов
+            if (results.packetLoss > 10)
+            {
+                issues.Add("Высокая потеря пакетов данных");
+                recommendations.Add("Возможно нестабильное соединение с провайдером");
+                recommendations.Add("Попробуйте перезагрузить сетевое оборудование");
+            }
+            else if (results.packetLoss > 5)
+            {
+                issues.Add("Умеренная потеря пакетов");
+                recommendations.Add("Соединение может быть нестабильным при звонках или играх");
+            }
+
+            // Проверяем пинг
+            if (results.ping > 150)
+            {
+                issues.Add("Высокий пинг (задержка)");
+                recommendations.Add("Могут быть проблемы с онлайн-играми и видеозвонками");
+            }
+
+            // Проверяем блокировки
+            if (results.youtubeBlocked || results.telegramBlocked || results.vkBlocked)
+            {
+                if (results.youtubeBlocked && results.telegramBlocked)
+                {
+                    issues.Add("Выявлены блокировки на уровне DPI/SNI");
+                    recommendations.Add("Используйте VPN с obfuscation (маскировкой трафика)");
+                    recommendations.Add("Попробуйте VPN протоколы: VLESS over gRPC или Trojan over TLS");
+                }
+                else if (results.youtubeBlocked)
+                {
+                    issues.Add("Блокировка YouTube (возможно РКН или провайдер)");
+                }
+                else if (results.telegramBlocked)
+                {
+                    issues.Add("Блокировка Telegram (стандартная блокировка РКН)");
+                }
+            }
+
+            // Проверяем блокировку VPN протоколов
+            if (results.blockedProtocols.Count > 0)
+            {
+                issues.Add($"Провайдер блокирует VPN протоколы: {string.Join(", ", results.blockedProtocols)}");
+
+                if (results.blockedProtocols.Contains("SHADOWSOCKS"))
+                {
+                    recommendations.Add("Shadowsocks часто блокируется, попробуйте VLESS или Trojan");
+                }
+
+                if (results.blockedProtocols.Contains("WIREGUARD"))
+                {
+                    recommendations.Add("WireGuard блокируется по порту 51820, попробуйте порт 443");
+                }
+
+                recommendations.Add("Используйте менее распространенные порты (2053, 2083, 8443)");
+            }
+
+            // Проверяем DPI
+            if (results.dpiDetected)
+            {
+                issues.Add("Провайдер использует DPI (глубокая проверка пакетов)");
+                recommendations.Add("Используйте протоколы с маскировкой: VLESS over gRPC/WebSocket");
+                recommendations.Add("Включите TLS/SSL шифрование во всех протоколах");
+            }
+
+            // Проверяем SNI блокировку
+            if (results.sniBlocked)
+            {
+                issues.Add("Обнаружена SNI-блокировка (блокировка по имени домена)");
+                recommendations.Add("Используйте ECH (Encrypted Client Hello) если поддерживается");
+                recommendations.Add("Настройте маскировку под обычный HTTPS трафик");
+            }
+
+            // Если VPN активен, но есть блокировки
+            if (results.isVpnActive && (results.youtubeBlocked || results.telegramBlocked))
+            {
+                issues.Add("VPN не справляется с обходом блокировок");
+                recommendations.Add("Попробуйте другой VPN сервер или протокол");
+                recommendations.Add("Убедитесь, что VPN правильно настроен");
+            }
+
+            // Формируем заключение
+            if (issues.Count == 0)
+            {
+                report.Append("Ваше интернет-соединение в отличном состоянии!\n");
+                report.Append("Скорость высокая, пинг низкий, блокировок не обнаружено.\n");
+            }
+            else
+            {
+                report.Append("Обнаружены следующие проблемы:\n");
+                foreach (var issue in issues)
+                {
+                    report.Append($"• {issue}\n");
+                }
+                report.Append("\n");
+
+                report.Append("Рекомендации:\n");
+                foreach (var recommendation in recommendations)
+                {
+                    report.Append($"• {recommendation}\n");
+                }
+            }
+
+            // Добавляем итоговую информацию
+            report.Append("\n==========================\n");
+            float diagnosticTime = Time.time - startDiagnosticTime;
+            report.Append($"Диагностика выполнена за {diagnosticTime:F1} секунд\n");
+
+            outputText.text = report.ToString();
+            yield return null;
+        }
+
+        private IEnumerator SimulateEditorDiagnostic(DiagnosticResults results)
+        {
+            UpdateProgress(20, "Симуляция...");
             yield return new WaitForSeconds(0.3f);
+
+            UpdateProgress(50, "Проверка сети...");
+            yield return new WaitForSeconds(0.3f);
+
+            UpdateProgress(80, "Тестирование...");
+            yield return new WaitForSeconds(0.3f);
+
+            // Заполняем тестовые данные
+            results.connectionType = "Wi-Fi";
+            results.networkProvider = "Ростелеком";
+            results.isVpnActive = false;
+            results.downloadSpeed = 47.3f;
+            results.uploadSpeed = 12.8f;
+            results.ping = 24f;
+            results.packetLoss = 0.5f;
+            results.youtubeBlocked = true;
+            results.telegramBlocked = true;
+            results.vkBlocked = false;
+            results.blockedProtocols = new List<string> { "SHADOWSOCKS", "WIREGUARD" };
+            results.blockedDomains = new List<string> { "RuTracker", "Telegram" };
+            results.dpiDetected = true;
+
+            UpdateProgress(100, "Готово");
+            yield return null;
         }
 
         private void AppendOutput(string text)
@@ -388,7 +640,8 @@ namespace NetworkDiagnostic
         private void ClearOutput()
         {
             report.Clear();
-            outputText.text = "";
+            if (outputText != null)
+                outputText.text = "";
         }
 
         private void UpdateProgress(int progress, string message)
@@ -397,7 +650,7 @@ namespace NetworkDiagnostic
                 progressSlider.value = progress;
 
             if (progressText != null)
-                progressText.text = progress + "% - " + message;
+                progressText.text = $"{progress}% - {message}";
         }
 
         private void ShowLoading(bool show)
@@ -408,9 +661,6 @@ namespace NetworkDiagnostic
             if (startButton != null)
                 startButton.interactable = !show;
 
-            if (addDomainButton != null)
-                addDomainButton.interactable = !show;
-
             if (saveReportButton != null)
                 saveReportButton.interactable = !show;
         }
@@ -420,7 +670,7 @@ namespace NetworkDiagnostic
             try
             {
                 string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-                string filename = "network_diagnostic_" + timestamp + ".txt";
+                string filename = $"network_diagnostic_{timestamp}.txt";
                 string path = Path.Combine(Application.persistentDataPath, filename);
 
                 string fullReport = "ОТЧЕТ ДИАГНОСТИКИ СЕТИ\n" +
@@ -431,11 +681,13 @@ namespace NetworkDiagnostic
                     "\n" + report.ToString();
 
                 File.WriteAllText(path, fullReport);
-                AppendOutput("\nОтчет сохранен: " + filename + "\n");
+                report.Append($"\nОтчет сохранен: {filename}\n");
+                outputText.text = report.ToString();
             }
             catch (System.Exception e)
             {
-                AppendOutput("\nОшибка сохранения: " + e.Message + "\n");
+                report.Append($"\nОшибка сохранения: {e.Message}\n");
+                outputText.text = report.ToString();
             }
         }
     }

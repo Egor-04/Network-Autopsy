@@ -1,427 +1,442 @@
 ﻿using System.IO;
 using System.Text;
+using System.Collections;
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace NetworkDiagnostic
 {
     public class NetworkDiagnosticManager : MonoBehaviour
     {
         [System.Serializable]
-        public class UISettings
+        public class DomainCheck
         {
-            [SerializeField] private bool useUI = true;
-            [SerializeField] private TMP_Text diagnosticText;
-            [SerializeField] private TMP_Text summaryText;
-            [SerializeField] private TMP_Text statusText;
-            [SerializeField] private TMP_Text timestampText;
-            [SerializeField] private UnityEngine.UI.Button diagnoseButton;
-            [SerializeField] private UnityEngine.UI.Button saveButton;
-            [SerializeField] private UnityEngine.UI.Button clearButton;
-            [SerializeField] private UnityEngine.UI.ScrollRect scrollView;
-            [SerializeField] private GameObject loadingPanel;
-
-            public bool UseUI => useUI;
-            public TMP_Text DiagnosticText => diagnosticText;
-            public TMP_Text SummaryText => summaryText;
-            public TMP_Text StatusText => statusText;
-            public TMP_Text TimestampText => timestampText;
-            public UnityEngine.UI.Button DiagnoseButton => diagnoseButton;
-            public UnityEngine.UI.Button SaveButton => saveButton;
-            public UnityEngine.UI.Button ClearButton => clearButton;
-            public UnityEngine.UI.ScrollRect ScrollView => scrollView;
-            public GameObject LoadingPanel => loadingPanel;
+            public string domain;
+            public string description;
+            public bool isBlockedTest;
         }
 
-        [System.Serializable]
-        public class DiagnosticSettings
-        {
-            [SerializeField] private bool autoDiagnoseOnStart = true;
-            [SerializeField] private bool saveReports = true;
-            [SerializeField] private bool showNotifications = true;
-            [SerializeField] private bool useAdvancedDiagnostics = true;
-            [SerializeField] private float autoRefreshInterval = 0f;
+        [Header("UI Elements")]
+        [SerializeField] private TMP_Text outputText;
+        [SerializeField] private ScrollRect scrollView;
+        [SerializeField] private Button startButton;
+        [SerializeField] private Slider progressSlider;
+        [SerializeField] private TMP_Text progressText;
+        [SerializeField] private GameObject loadingPanel;
+        [SerializeField] private Button addDomainButton;
+        [SerializeField] private TMP_InputField newDomainInput;
+        [SerializeField] private Button saveReportButton;
 
-            public bool AutoDiagnoseOnStart => autoDiagnoseOnStart;
-            public bool SaveReports => saveReports;
-            public bool ShowNotifications => showNotifications;
-            public bool UseAdvancedDiagnostics => useAdvancedDiagnostics;
-            public float AutoRefreshInterval => autoRefreshInterval;
+        [Header("Domain List")]
+        [SerializeField]
+        private List<DomainCheck> domainsToCheck = new List<DomainCheck>
+        {
+            new DomainCheck { domain = "google.com", description = "Google", isBlockedTest = false },
+            new DomainCheck { domain = "youtube.com", description = "YouTube", isBlockedTest = false },
+            new DomainCheck { domain = "vk.com", description = "VK", isBlockedTest = true },
+            new DomainCheck { domain = "telegram.org", description = "Telegram", isBlockedTest = true },
+            new DomainCheck { domain = "github.com", description = "GitHub", isBlockedTest = false },
+            new DomainCheck { domain = "rutracker.org", description = "RuTracker", isBlockedTest = true }
+        };
+
+        [Header("Protocol List")]
+        [SerializeField]
+        private List<string> protocolsToCheck = new List<string>
+        {
+            "HTTP (80)",
+            "HTTPS (443)",
+            "DNS (53)",
+            "FTP (21)",
+            "SSH (22)",
+            "SMTP (25)",
+            "POP3 (110)",
+            "IMAP (143)",
+            "RDP (3389)",
+            "OpenVPN (1194)",
+            "WireGuard (51820)",
+            "Tor (9050)",
+            "BitTorrent (6881)",
+            "QUIC (443)",
+            "WebSocket (80)"
+        };
+
+        private StringBuilder report = new StringBuilder();
+        private bool isRunning = false;
+        private Coroutine diagnosticCoroutine;
+
+        void Start()
+        {
+            if (startButton != null)
+                startButton.onClick.AddListener(StartDiagnostic);
+
+            if (addDomainButton != null)
+                addDomainButton.onClick.AddListener(AddNewDomain);
+
+            if (saveReportButton != null)
+                saveReportButton.onClick.AddListener(SaveCurrentReport);
+
+            ClearOutput();
         }
 
-        [Header("UI Settings")]
-        [SerializeField] private UISettings uiSettings = new UISettings();
-
-        [Header("Diagnostic Settings")]
-        [SerializeField] private DiagnosticSettings diagnosticSettings = new DiagnosticSettings();
-
-        private string lastReport = "";
-        private bool isDiagnosing = false;
-        private float refreshTimer = 0f;
-
-        #region Unity Lifecycle
-
-        private void Start()
-        {
-            InitializeUI();
-
-            if (diagnosticSettings.AutoDiagnoseOnStart)
-            {
-                StartDiagnostic();
-            }
-
-            if (diagnosticSettings.AutoRefreshInterval > 0)
-            {
-                refreshTimer = diagnosticSettings.AutoRefreshInterval;
-            }
-        }
-
-        private void Update()
+        void Update()
         {
             if (Input.GetKeyDown(KeyCode.D))
-            {
                 StartDiagnostic();
-            }
-
-            if (diagnosticSettings.AutoRefreshInterval > 0 && !isDiagnosing)
-            {
-                refreshTimer -= Time.deltaTime;
-                if (refreshTimer <= 0f)
-                {
-                    StartDiagnostic();
-                    refreshTimer = diagnosticSettings.AutoRefreshInterval;
-                }
-            }
         }
-
-        #endregion
-
-        #region Public Methods
 
         public void StartDiagnostic()
         {
-            if (isDiagnosing) return;
+            if (isRunning) return;
 
-            isDiagnosing = true;
+            isRunning = true;
             ShowLoading(true);
-            UpdateStatus("Starting network diagnostic...");
-            UpdateTimestamp();
+            ClearOutput();
 
-            Debug.Log("=== STARTING NETWORK DIAGNOSTIC ===");
+            if (diagnosticCoroutine != null)
+                StopCoroutine(diagnosticCoroutine);
 
-#if UNITY_ANDROID && !UNITY_EDITOR
-            RunAndroidDiagnostic();
-#else
-            ShowEditorDiagnostic();
-#endif
+            diagnosticCoroutine = StartCoroutine(RunFullDiagnostic());
+        }
+
+        public void AddNewDomain()
+        {
+            if (string.IsNullOrEmpty(newDomainInput.text)) return;
+
+            string domain = newDomainInput.text.Trim();
+            domainsToCheck.Add(new DomainCheck
+            {
+                domain = domain,
+                description = domain,
+                isBlockedTest = false
+            });
+
+            newDomainInput.text = "";
+            AppendOutput($"Добавлен домен: {domain}\n");
         }
 
         public void SaveCurrentReport()
         {
-            if (string.IsNullOrEmpty(lastReport))
+            if (report.Length == 0)
             {
-                ShowNotification("No data to save");
+                AppendOutput("Нет данных для сохранения\n");
                 return;
             }
 
-            SaveReportToFile(lastReport);
+            SaveReport();
         }
 
-        public void ClearResults()
+        private IEnumerator RunFullDiagnostic()
         {
-            lastReport = "";
-            UpdateDiagnosticText("");
-            UpdateStatus("Results cleared");
-            ShowNotification("Results cleared");
+            report.Clear();
+            AppendOutput("=== ДИАГНОСТИКА СЕТИ ===\n\n");
+
+            // 1. Базовая информация
+            yield return StartCoroutine(CheckBasicNetworkInfo());
+
+            // 2. Скорость интернета
+            yield return StartCoroutine(CheckNetworkSpeed());
+
+            // 3. Проверка доменов
+            yield return StartCoroutine(CheckDomains());
+
+            // 4. Проверка протоколов
+            yield return StartCoroutine(CheckProtocols());
+
+            // 5. Детальная диагностика
+            yield return StartCoroutine(DetailedDiagnostics());
+
+            AppendOutput("\n=== ДИАГНОСТИКА ЗАВЕРШЕНА ===\n");
+
+            SaveReport();
+
+            ShowLoading(false);
+            isRunning = false;
         }
 
-        #endregion
-
-        #region Private Methods
-
-        private void InitializeUI()
+        private IEnumerator CheckBasicNetworkInfo()
         {
-            if (!uiSettings.UseUI) return;
+            UpdateProgress(10, "Получение информации о сети");
 
-            if (uiSettings.DiagnoseButton != null)
-            {
-                uiSettings.DiagnoseButton.onClick.AddListener(StartDiagnostic);
-            }
-
-            if (uiSettings.SaveButton != null)
-            {
-                uiSettings.SaveButton.onClick.AddListener(SaveCurrentReport);
-            }
-
-            if (uiSettings.ClearButton != null)
-            {
-                uiSettings.ClearButton.onClick.AddListener(ClearResults);
-            }
-
-            UpdateTimestamp();
-        }
+            AppendOutput("1. ИНФОРМАЦИЯ О ПОДКЛЮЧЕНИИ:\n");
+            AppendOutput("------------------------------\n");
 
 #if UNITY_ANDROID && !UNITY_EDITOR
-        private void RunAndroidDiagnostic()
-        {
             try
             {
                 AndroidJavaClass unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
                 AndroidJavaObject activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity");
                 AndroidJavaObject context = activity.Call<AndroidJavaObject>("getApplicationContext");
                 
-                string result;
-                
-                // ВСЕГДА используем AdvancedNetworkDiagnostic
-                AndroidJavaClass diagnosticClass = new AndroidJavaClass(
-                    "com.UnknownGameStudio.NetworkAutopsy.AdvancedNetworkDiagnostic"
-                );
-                
-                // Вызываем статический метод
-                result = diagnosticClass.CallStatic<string>("quickDiagnose", context);
-                
-                ProcessDiagnosticResult(result);
+                AndroidJavaClass networkInfo = new AndroidJavaClass("com.UnknownGameStudio.NetworkAutopsy.NetworkInfo");
+                string info = networkInfo.CallStatic<string>("getBasicInfo", context);
+                AppendOutput(info + "\n");
             }
             catch (System.Exception e)
             {
-                string errorMessage = FormatErrorMessage(e);
-                ProcessDiagnosticResult(errorMessage);
+                AppendOutput("[ERROR] " + e.Message + "\n");
             }
-        }
+#else
+            AppendOutput("Тип подключения: Wi-Fi\n");
+            AppendOutput("Статус: Подключено\n");
+            AppendOutput("IP адрес: 192.168.1.100\n");
+            AppendOutput("Провайдер: Ростелеком (симуляция)\n");
+            AppendOutput("Страна: Россия\n");
+            AppendOutput("Город: Москва\n");
 #endif
 
-        private string FormatErrorMessage(System.Exception e)
-        {
-            StringBuilder error = new StringBuilder();
-            error.AppendLine("========================================");
-            error.AppendLine("DIAGNOSTIC ERROR");
-            error.AppendLine("========================================");
-            error.AppendLine();
-            error.AppendLine("Error type: " + e.GetType().Name);
-            error.AppendLine("Message: " + e.Message);
-            error.AppendLine();
-            error.AppendLine("Recommendations:");
-            error.AppendLine("- Check app permissions");
-            error.AppendLine("- Restart the app");
-            error.AppendLine("- Update the app");
-            error.AppendLine("========================================");
-
-            return error.ToString();
+            yield return new WaitForSeconds(0.3f);
         }
 
-        private void ShowEditorDiagnostic()
+        private IEnumerator CheckNetworkSpeed()
         {
-            StringBuilder mockResult = new StringBuilder();
-            mockResult.AppendLine("========================================");
-            mockResult.AppendLine("NETWORK DIAGNOSTIC (EDITOR)");
-            mockResult.AppendLine("========================================");
-            mockResult.AppendLine();
-            mockResult.AppendLine("1. BASIC INFORMATION:");
-            mockResult.AppendLine("----------------------------------------");
-            mockResult.AppendLine("[STATUS] CONNECTED (simulation)");
-            mockResult.AppendLine("[TYPE] Wi-Fi");
-            mockResult.AppendLine("[SIGNAL] Good (simulation)");
-            mockResult.AppendLine();
+            UpdateProgress(30, "Проверка скорости интернета");
 
-            mockResult.AppendLine("2. CONNECTION DETAILS:");
-            mockResult.AppendLine("----------------------------------------");
-            mockResult.AppendLine("IPv4: 192.168.1.100 (interface: wlan0)");
-            mockResult.AppendLine("IPv6: fe80::abcd:1234 (interface: wlan0)");
-            mockResult.AppendLine("DNS servers:");
-            mockResult.AppendLine("  - 8.8.8.8");
-            mockResult.AppendLine("  - 1.1.1.1");
-            mockResult.AppendLine();
+            AppendOutput("\n2. ТЕСТ СКОРОСТИ ИНТЕРНЕТА:\n");
+            AppendOutput("-----------------------------\n");
 
-            mockResult.AppendLine("3. DETECTED ISSUES:");
-            mockResult.AppendLine("----------------------------------------");
-            mockResult.AppendLine("[WARNING] VPN detected (simulation)");
-            mockResult.AppendLine("[WARNING] High ping: 250 ms");
-            mockResult.AppendLine("[SUCCESS] No critical issues");
-            mockResult.AppendLine();
-
-            mockResult.AppendLine("4. RECOMMENDATIONS:");
-            mockResult.AppendLine("----------------------------------------");
-            mockResult.AppendLine("- Check VPN settings");
-            mockResult.AppendLine("- Try different DNS");
-            mockResult.AppendLine("- Restart router");
-            mockResult.AppendLine();
-
-            mockResult.AppendLine("5. AVAILABILITY TESTS:");
-            mockResult.AppendLine("----------------------------------------");
-            mockResult.AppendLine("[OK] Google: working");
-            mockResult.AppendLine("[OK] YouTube: working");
-            mockResult.AppendLine("[OK] VK: working");
-            mockResult.AppendLine("[OK] Yandex: working");
-            mockResult.AppendLine("[OK] GitHub: working");
-            mockResult.AppendLine();
-            mockResult.AppendLine("========================================");
-            mockResult.AppendLine("DIAGNOSTIC COMPLETED");
-            mockResult.AppendLine("========================================");
-
-            ProcessDiagnosticResult(mockResult.ToString());
-        }
-
-        private void ProcessDiagnosticResult(string result)
-        {
-            lastReport = result;
-
-            DisplayResults(result);
-
-            if (diagnosticSettings.SaveReports)
-            {
-                SaveReportToFile(result);
-            }
-
-            UpdateStatus("Diagnostic completed");
-            UpdateSummary(ExtractSummary(result));
-
-            ShowLoading(false);
-            isDiagnosing = false;
-
-            if (diagnosticSettings.ShowNotifications)
-            {
-                ShowNotification("Diagnostic completed");
-            }
-        }
-
-        private void DisplayResults(string result)
-        {
-            if (!uiSettings.UseUI) return;
-
-            UpdateDiagnosticText(result);
-
-            if (uiSettings.ScrollView != null)
-            {
-                Canvas.ForceUpdateCanvases();
-                uiSettings.ScrollView.verticalNormalizedPosition = 0f;
-            }
-        }
-
-        private string ExtractSummary(string report)
-        {
-            // Анализируем английский отчет
-            if (report.Contains("[ERROR]") || report.Contains("ERROR"))
-            {
-                return "Critical errors detected";
-            }
-            else if (report.Contains("[WARNING]") || report.Contains("WARNING"))
-            {
-                return "Warnings detected";
-            }
-            else if (report.Contains("[GOOD]") || report.Contains("SUCCESS"))
-            {
-                return "Network working normally";
-            }
-            else if (report.Contains("BLOCKED"))
-            {
-                return "Blocking detected";
-            }
-
-            return "Diagnostic completed";
-        }
-
-        private void SaveReportToFile(string report)
-        {
+#if UNITY_ANDROID && !UNITY_EDITOR
             try
             {
-                string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-                string filename = $"network_diagnostic_{timestamp}.txt";
-                string path = Path.Combine(Application.persistentDataPath, filename);
-
-                StringBuilder fullReport = new StringBuilder();
-                fullReport.AppendLine("NETWORK DIAGNOSTIC REPORT");
-                fullReport.AppendLine("==========================");
-                fullReport.AppendLine("Time: " + System.DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss"));
-                fullReport.AppendLine("Device: " + SystemInfo.deviceModel);
-                fullReport.AppendLine("OS: " + SystemInfo.operatingSystem);
-                fullReport.AppendLine("Unity version: " + Application.unityVersion);
-                fullReport.AppendLine();
-                fullReport.AppendLine(report);
-
-                File.WriteAllText(path, fullReport.ToString());
-
-                Debug.Log("Report saved: " + path);
-
-                if (diagnosticSettings.ShowNotifications)
-                {
-                    ShowNotification("Report saved: " + filename);
-                }
+                AndroidJavaClass speedTest = new AndroidJavaClass("com.UnknownGameStudio.NetworkAutopsy.SpeedTest");
+                
+                AppendOutput("Загрузка: ");
+                float downloadSpeed = speedTest.CallStatic<float>("testDownload");
+                AppendOutput(downloadSpeed.ToString("F1") + " Мбит/с\n");
+                
+                AppendOutput("Отдача: ");
+                float uploadSpeed = speedTest.CallStatic<float>("testUpload");
+                AppendOutput(uploadSpeed.ToString("F1") + " Мбит/с\n");
+                
+                AppendOutput("Пинг: ");
+                int ping = speedTest.CallStatic<int>("testPing", "8.8.8.8");
+                AppendOutput(ping + " мс\n");
+                
+                // Оценка
+                if (downloadSpeed < 1) AppendOutput("ОЦЕНКА: Очень медленно\n");
+                else if (downloadSpeed < 10) AppendOutput("ОЦЕНКА: Средняя скорость\n");
+                else if (downloadSpeed < 50) AppendOutput("ОЦЕНКА: Хорошая скорость\n");
+                else AppendOutput("ОЦЕНКА: Отличная скорость\n");
             }
             catch (System.Exception e)
             {
-                Debug.LogWarning("Error saving report: " + e.Message);
+                AppendOutput("[ERROR] " + e.Message + "\n");
+            }
+#else
+            AppendOutput("Загрузка: 47.3 Мбит/с (симуляция)\n");
+            AppendOutput("Отдача: 12.8 Мбит/с (симуляция)\n");
+            AppendOutput("Пинг: 24 мс (симуляция)\n");
+            AppendOutput("ОЦЕНКА: Отличная скорость\n");
+#endif
 
-                if (diagnosticSettings.ShowNotifications)
+            yield return new WaitForSeconds(0.5f);
+        }
+
+        private IEnumerator CheckDomains()
+        {
+            UpdateProgress(50, "Проверка доступности сайтов");
+
+            AppendOutput("\n3. ПРОВЕРКА ДОСТУПНОСТИ САЙТОВ:\n");
+            AppendOutput("---------------------------------\n");
+
+            int total = domainsToCheck.Count;
+            int checkedCount = 0;
+            int blockedCount = 0;
+
+            foreach (var domainCheck in domainsToCheck)
+            {
+                checkedCount++;
+                UpdateProgress(50 + (int)(30f * checkedCount / total),
+                    "Проверка " + domainCheck.domain);
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+                try
                 {
-                    ShowNotification("Save error: " + e.Message);
+                    AndroidJavaClass checker = new AndroidJavaClass("com.UnknownGameStudio.NetworkAutopsy.DomainChecker");
+                    bool isAvailable = checker.CallStatic<bool>("checkDomain", domainCheck.domain);
+                    bool isBlocked = domainCheck.isBlockedTest && !isAvailable;
+                    
+                    string status = isAvailable ? "[OK]" : "[BLOCKED]";
+                    string description = isBlocked ? " (БЛОКИРОВКА!)" : "";
+                    
+                    AppendOutput(status + " " + domainCheck.description + 
+                        " (" + domainCheck.domain + ")" + description + "\n");
+                    
+                    if (isBlocked) blockedCount++;
                 }
+                catch
+                {
+                    AppendOutput("[ERROR] " + domainCheck.description + " (ошибка проверки)\n");
+                }
+#else
+                bool isBlocked = domainCheck.isBlockedTest &&
+                    (domainCheck.domain.Contains("vk") ||
+                     domainCheck.domain.Contains("telegram") ||
+                     domainCheck.domain.Contains("rutracker"));
+
+                string status = isBlocked ? "[BLOCKED]" : "[OK]";
+                string description = isBlocked ? " (БЛОКИРОВКА РКН)" : "";
+
+                AppendOutput(status + " " + domainCheck.description +
+                    " (" + domainCheck.domain + ")" + description + "\n");
+
+                if (isBlocked) blockedCount++;
+#endif
+
+                yield return new WaitForSeconds(0.1f);
+            }
+
+            AppendOutput("\nИТОГО: " + blockedCount + " из " + total + " сайтов заблокировано\n");
+        }
+
+        private IEnumerator CheckProtocols()
+        {
+            UpdateProgress(80, "Проверка протоколов");
+
+            AppendOutput("\n4. ПРОВЕРКА ПРОТОКОЛОВ:\n");
+            AppendOutput("-------------------------\n");
+
+            int total = protocolsToCheck.Count;
+            int checkedCount = 0;
+            int blockedCount = 0;
+
+            foreach (var protocol in protocolsToCheck)
+            {
+                checkedCount++;
+                UpdateProgress(80 + (int)(15f * checkedCount / total),
+                    "Проверка " + protocol);
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+                try
+                {
+                    AndroidJavaClass protocolChecker = new AndroidJavaClass("com.UnknownGameStudio.NetworkAutopsy.ProtocolChecker");
+                    bool isBlocked = protocolChecker.CallStatic<bool>("checkProtocol", protocol);
+                    
+                    string status = isBlocked ? "[BLOCKED]" : "[OPEN]";
+                    AppendOutput(status + " " + protocol + "\n");
+                    
+                    if (isBlocked) blockedCount++;
+                }
+                catch
+                {
+                    AppendOutput("[ERROR] " + protocol + " (ошибка проверки)\n");
+                }
+#else
+                bool isBlocked = protocol.Contains("Tor") ||
+                                 protocol.Contains("BitTorrent") ||
+                                 protocol.Contains("OpenVPN");
+
+                string status = isBlocked ? "[BLOCKED]" : "[OPEN]";
+                string reason = isBlocked ? " (блокировка провайдера)" : "";
+
+                AppendOutput(status + " " + protocol + reason + "\n");
+
+                if (isBlocked) blockedCount++;
+#endif
+
+                yield return new WaitForSeconds(0.1f);
+            }
+
+            AppendOutput("\nИТОГО: " + blockedCount + " из " + total + " протоколов заблокировано\n");
+        }
+
+        private IEnumerator DetailedDiagnostics()
+        {
+            UpdateProgress(95, "Детальная диагностика");
+
+            AppendOutput("\n5. ДЕТАЛЬНАЯ ДИАГНОСТИКА:\n");
+            AppendOutput("---------------------------\n");
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                AndroidJavaClass diagnostic = new AndroidJavaClass("com.UnknownGameStudio.NetworkAutopsy.NetworkDiagnostic");
+                string details = diagnostic.CallStatic<string>("getDetailedInfo");
+                AppendOutput(details + "\n");
+            }
+            catch (System.Exception e)
+            {
+                AppendOutput("[ERROR] " + e.Message + "\n");
+            }
+#else
+            AppendOutput("VPN обнаружено: Нет\n");
+            AppendOutput("Прокси обнаружено: Нет\n");
+            AppendOutput("Пакетная потеря: 0.2%\n");
+            AppendOutput("Джиттер: 5 мс\n");
+            AppendOutput("Максимальный пинг: 87 мс\n");
+            AppendOutput("DNS утечки: Нет\n");
+            AppendOutput("WebRTC утечки: Нет\n");
+            AppendOutput("IPv6 доступен: Да\n");
+#endif
+
+            yield return new WaitForSeconds(0.3f);
+        }
+
+        private void AppendOutput(string text)
+        {
+            report.Append(text);
+            outputText.text = report.ToString();
+
+            if (scrollView != null)
+            {
+                Canvas.ForceUpdateCanvases();
+                scrollView.verticalNormalizedPosition = 0f;
             }
         }
 
-        #endregion
-
-        #region UI Update Methods
-
-        private void UpdateDiagnosticText(string text)
+        private void ClearOutput()
         {
-            if (uiSettings.UseUI && uiSettings.DiagnosticText != null)
-            {
-                uiSettings.DiagnosticText.text = text;
-            }
+            report.Clear();
+            outputText.text = "";
         }
 
-        private void UpdateSummary(string text)
+        private void UpdateProgress(int progress, string message)
         {
-            if (uiSettings.UseUI && uiSettings.SummaryText != null)
-            {
-                uiSettings.SummaryText.text = text;
-            }
-        }
+            if (progressSlider != null)
+                progressSlider.value = progress;
 
-        private void UpdateStatus(string text)
-        {
-            if (uiSettings.UseUI && uiSettings.StatusText != null)
-            {
-                uiSettings.StatusText.text = text;
-            }
-        }
-
-        private void UpdateTimestamp()
-        {
-            if (uiSettings.UseUI && uiSettings.TimestampText != null)
-            {
-                uiSettings.TimestampText.text = "Updated: " +
-                    System.DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss");
-            }
+            if (progressText != null)
+                progressText.text = progress + "% - " + message;
         }
 
         private void ShowLoading(bool show)
         {
-            if (!uiSettings.UseUI) return;
+            if (loadingPanel != null)
+                loadingPanel.SetActive(show);
 
-            if (uiSettings.LoadingPanel != null)
-            {
-                uiSettings.LoadingPanel.SetActive(show);
-            }
+            if (startButton != null)
+                startButton.interactable = !show;
 
-            if (uiSettings.DiagnoseButton != null)
-            {
-                uiSettings.DiagnoseButton.interactable = !show;
-            }
+            if (addDomainButton != null)
+                addDomainButton.interactable = !show;
+
+            if (saveReportButton != null)
+                saveReportButton.interactable = !show;
         }
 
-        private void ShowNotification(string message)
+        private void SaveReport()
         {
-            if (!diagnosticSettings.ShowNotifications) return;
-
-            Debug.Log("Notification: " + message);
-
-            if (uiSettings.UseUI && uiSettings.StatusText != null)
+            try
             {
-                uiSettings.StatusText.text = message;
+                string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
+                string filename = "network_diagnostic_" + timestamp + ".txt";
+                string path = Path.Combine(Application.persistentDataPath, filename);
+
+                string fullReport = "ОТЧЕТ ДИАГНОСТИКИ СЕТИ\n" +
+                    "==========================\n" +
+                    "Время: " + System.DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss") + "\n" +
+                    "Устройство: " + SystemInfo.deviceModel + "\n" +
+                    "ОС: " + SystemInfo.operatingSystem + "\n" +
+                    "\n" + report.ToString();
+
+                File.WriteAllText(path, fullReport);
+                AppendOutput("\nОтчет сохранен: " + filename + "\n");
+            }
+            catch (System.Exception e)
+            {
+                AppendOutput("\nОшибка сохранения: " + e.Message + "\n");
             }
         }
-
-        #endregion
     }
 }

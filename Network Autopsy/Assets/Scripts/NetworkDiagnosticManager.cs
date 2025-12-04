@@ -2,6 +2,7 @@
 using System.Text;
 using System.Collections;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -27,6 +28,9 @@ namespace NetworkDiagnostic
         private List<string> customDomains = new List<string>();
 
         private string[] russianSites = { "vk.com", "rutracker.org", "yandex.ru", "mail.ru", "rambler.ru", "avito.ru", "ok.ru" };
+
+        // Для отслеживания активных задач
+        private List<Task> activeTasks = new List<Task>();
 
         void Start()
         {
@@ -117,7 +121,7 @@ namespace NetworkDiagnostic
                 string path = Path.Combine(Application.persistentDataPath, filename);
 
                 string fullReport = "ОТЧЕТ ДИАГНОСТИКИ СЕТИ\n" +
-                    "==========================\n" +
+                    "—————————————————————————————————\n" +
                     "Время: " + System.DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss") + "\n" +
                     "Устройство: " + SystemInfo.deviceModel + "\n" +
                     "ОС: " + SystemInfo.operatingSystem + "\n" +
@@ -178,7 +182,8 @@ namespace NetworkDiagnostic
             UpdateProgress(30, "Загрузка Java модуля...");
             yield return null;
 
-            yield return StartCoroutine(CallJavaCode(context, (result) => {
+            yield return StartCoroutine(CallJavaCode(context, (result) =>
+            {
                 javaResult = result;
             }));
 
@@ -201,15 +206,16 @@ namespace NetworkDiagnostic
                 UpdateProgress(80, "Проверка дополнительных доменов...");
                 yield return null;
 
-                AddLine("\n=== ДОПОЛНИТЕЛЬНЫЕ ДОМЕНЫ ===");
+                AddLine("\n—— ДОПОЛНИТЕЛЬНЫЕ ДОМЕНЫ ——");
 
-                yield return StartCoroutine(CheckDomainsReliable(customDomains.ToArray()));
+                // Используем неблокирующую проверку
+                yield return StartCoroutine(CheckDomainsNonBlocking(customDomains.ToArray()));
             }
 
             UpdateProgress(95, "Формирование заключения...");
             yield return null;
 
-            AddLine("\n=== ЗАКЛЮЧЕНИЕ ===");
+            AddLine("\n———— ЗАКЛЮЧЕНИЕ ————");
 
             if (javaResult.Contains("YouTube: BLOCKED") || javaResult.Contains("Telegram: BLOCKED"))
             {
@@ -228,6 +234,180 @@ namespace NetworkDiagnostic
             AddLine($"\nВсего проверено доменов: {customDomains.Count + 4}");
 
             yield return null;
+        }
+
+        private IEnumerator CheckDomainsNonBlocking(string[] domains)
+        {
+            activeTasks.Clear();
+            Dictionary<string, string> results = new Dictionary<string, string>();
+
+            foreach (string domain in domains)
+            {
+                var task = CheckDomainAsync(domain, results);
+                activeTasks.Add(task);
+            }
+
+            int lastCompleted = 0;
+            float startTime = Time.time;
+
+            while (activeTasks.Count > 0 && Time.time - startTime < 30f) // Максимум 30 секунд
+            {
+                for (int i = activeTasks.Count - 1; i >= 0; i--)
+                {
+                    if (activeTasks[i].IsCompleted || activeTasks[i].IsFaulted || activeTasks[i].IsCanceled)
+                    {
+                        activeTasks.RemoveAt(i);
+                    }
+                }
+
+                int completed = domains.Length - activeTasks.Count;
+                if (completed > lastCompleted)
+                {
+                    lastCompleted = completed;
+                    int progress = 80 + (int)((completed / (float)domains.Length) * 15);
+                    UpdateProgress(progress, $"Проверено {completed} из {domains.Length} доменов");
+                }
+
+                yield return new WaitForSeconds(0.05f);
+            }
+
+            foreach (string domain in domains)
+            {
+                if (results.ContainsKey(domain))
+                {
+                    AddLine(results[domain]);
+                }
+            }
+
+            foreach (var task in activeTasks)
+            {
+                if (!task.IsCompleted)
+                {
+                }
+            }
+
+            activeTasks.Clear();
+        }
+
+        private async Task CheckDomainAsync(string domain, Dictionary<string, string> results)
+        {
+            await Task.Run(async () =>
+            {
+                try
+                {
+                    foreach (string russianSite in russianSites)
+                    {
+                        if (domain.Contains(russianSite))
+                        {
+                            lock (results)
+                            {
+                                results[domain] = $"{domain}: ДОСТУПЕН (Российский сайт)";
+                            }
+                            return;
+                        }
+                    }
+
+                    string result = await CheckDomainWithTimeoutAsync(domain);
+                    lock (results)
+                    {
+                        results[domain] = result;
+                    }
+                }
+                catch (System.Exception)
+                {
+                    lock (results)
+                    {
+                        results[domain] = $"{domain}: ОШИБКА проверки";
+                    }
+                }
+            });
+        }
+
+        private async Task<string> CheckDomainWithTimeoutAsync(string domain)
+        {
+            using (var timeoutCts = new System.Threading.CancellationTokenSource(6000))
+            {
+                var checkTask = CheckHttpsHeadAsync(domain, timeoutCts.Token);
+                var timeoutTask = Task.Delay(6000, timeoutCts.Token);
+
+                var completedTask = await Task.WhenAny(checkTask, timeoutTask);
+
+                if (completedTask == timeoutTask)
+                {
+                    return $"{domain}: ТАЙМАУТ";
+                }
+
+                return await checkTask;
+            }
+        }
+
+        private async Task<string> CheckHttpsHeadAsync(string domain, System.Threading.CancellationToken cancellationToken)
+        {
+            try
+            {
+                using (var httpClient = new System.Net.Http.HttpClient())
+                {
+                    httpClient.Timeout = System.TimeSpan.FromSeconds(5);
+                    httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0");
+
+                    var response = await httpClient.SendAsync(
+                        new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Head, $"https://{domain}"),
+                        cancellationToken
+                    );
+
+                    if (response.IsSuccessStatusCode || (int)response.StatusCode < 500)
+                    {
+                        return $"{domain}: ДОСТУПЕН";
+                    }
+                    else
+                    {
+                        return $"{domain}: ЗАБЛОКИРОВАН (HTTP {(int)response.StatusCode})";
+                    }
+                }
+            }
+            catch (System.Net.Http.HttpRequestException httpEx) when (httpEx.InnerException is System.Net.Sockets.SocketException)
+            {
+                return $"{domain}: ЗАБЛОКИРОВАН";
+            }
+            catch (System.Net.Sockets.SocketException)
+            {
+                return $"{domain}: ЗАБЛОКИРОВАН";
+            }
+            catch (System.OperationCanceledException)
+            {
+                return $"{domain}: ТАЙМАУТ";
+            }
+            catch (System.Exception)
+            {
+                return await CheckHttpAsFallbackAsync(domain, cancellationToken);
+            }
+        }
+
+        private async Task<string> CheckHttpAsFallbackAsync(string domain, System.Threading.CancellationToken cancellationToken)
+        {
+            try
+            {
+                using (var httpClient = new System.Net.Http.HttpClient())
+                {
+                    httpClient.Timeout = System.TimeSpan.FromSeconds(3);
+                    httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0");
+
+                    var response = await httpClient.SendAsync(
+                        new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Head, $"http://{domain}"),
+                        cancellationToken
+                    );
+
+                    if (response.IsSuccessStatusCode || (int)response.StatusCode < 500)
+                    {
+                        return $"{domain}: ДОСТУПЕН (только HTTP)";
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return $"{domain}: ЗАБЛОКИРОВАН (HTTPS/HTTP)";
         }
 
         private string FormatJavaResult(string input)
@@ -274,158 +454,6 @@ namespace NetworkDiagnostic
             }
 
             return string.Join("\n", formattedLines);
-        }
-
-        private IEnumerator CheckDomainsReliable(string[] domains)
-        {
-            for (int i = 0; i < domains.Length; i++)
-            {
-                string domain = domains[i];
-
-                int progress = 80 + (int)((i / (float)domains.Length) * 15);
-                UpdateProgress(progress, $"Проверка {i + 1} из {domains.Length}: {domain}");
-
-                yield return StartCoroutine(CheckDomainWithRetry(domain));
-            }
-        }
-
-        private IEnumerator CheckDomainWithRetry(string domain)
-        {
-            foreach (string russianSite in russianSites)
-            {
-                if (domain.Contains(russianSite))
-                {
-                    AddLine($"{domain}: ДОСТУПЕН (Российский сайт)");
-                    yield break;
-                }
-            }
-
-            string result = "";
-            bool isAccessible = false;
-            int attempts = 2;
-
-            for (int attempt = 1; attempt <= attempts; attempt++)
-            {
-                bool attemptResult = false;
-                yield return StartCoroutine(CheckHttpsHead(domain, attempt, (success, message) => {
-                    attemptResult = success;
-                    if (success)
-                    {
-                        isAccessible = true;
-                        result = $"{domain}: ДОСТУПЕН";
-                    }
-                    else
-                    {
-                        result = message;
-                    }
-                }));
-
-                if (isAccessible)
-                    break;
-
-                if (attempt == attempts && !isAccessible)
-                {
-                    yield return StartCoroutine(CheckHttpAsFallback(domain, (fallbackSuccess, fallbackMessage) => {
-                        if (fallbackSuccess)
-                        {
-                            isAccessible = true;
-                            result = $"{domain}: ДОСТУПЕН (только HTTP)";
-                        }
-                        else
-                        {
-                            result = $"{domain}: ЗАБЛОКИРОВАН (HTTPS/HTTP)";
-                        }
-                    }));
-                }
-
-                if (attempt < attempts && !isAccessible)
-                    yield return new WaitForSeconds(0.5f);
-            }
-
-            AddLine(result);
-        }
-
-        private IEnumerator CheckHttpsHead(string domain, int attempt, System.Action<bool, string> callback)
-        {
-            UnityWebRequest www = null;
-            bool success = false;
-            string message = "";
-
-            www = UnityWebRequest.Head($"https://{domain}");
-            www.timeout = 5;
-            www.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-
-            var operation = www.SendWebRequest();
-            float startTime = Time.time;
-
-            while (!operation.isDone && Time.time - startTime < 6f)
-            {
-                yield return null;
-            }
-
-            if (!operation.isDone)
-            {
-                www.Abort();
-                message = $"{domain}: ТАЙМАУТ (попытка {attempt}/2)";
-                success = false;
-            }
-            else if (www.result == UnityWebRequest.Result.Success ||
-                        www.result == UnityWebRequest.Result.ProtocolError)
-            {
-                success = true;
-                message = "";
-            }
-            else if (www.result == UnityWebRequest.Result.ConnectionError)
-            {
-                message = $"{domain}: ЗАБЛОКИРОВАН (попытка {attempt}/2)";
-                success = false;
-            }
-            else
-            {
-                message = $"{domain}: ОШИБКА ({www.result})";
-                success = false;
-            }
-
-            callback?.Invoke(success, message);
-        }
-
-        private IEnumerator CheckHttpAsFallback(string domain, System.Action<bool, string> callback)
-        {
-            UnityWebRequest www = null;
-            bool success = false;
-            string message = "";
-
-            www = UnityWebRequest.Head($"http://{domain}");
-            www.timeout = 3;
-            www.SetRequestHeader("User-Agent", "Mozilla/5.0");
-
-            var operation = www.SendWebRequest();
-            float startTime = Time.time;
-
-            while (!operation.isDone && Time.time - startTime < 4f)
-            {
-                yield return null;
-            }
-
-            if (!operation.isDone)
-            {
-                www.Abort();
-                success = false;
-                message = "";
-            }
-            else if (www.result == UnityWebRequest.Result.Success ||
-                        www.result == UnityWebRequest.Result.ProtocolError)
-            {
-                success = true;
-                message = "";
-            }
-            else
-            {
-                success = false;
-                message = "";
-            }
-
-            callback?.Invoke(success, message);
         }
 
         private IEnumerator CallJavaCode(AndroidJavaObject context, System.Action<string> callback)
@@ -561,7 +589,7 @@ namespace NetworkDiagnostic
 
             if (customDomains.Count > 0)
             {
-                AddLine("=== ДОПОЛНИТЕЛЬНЫЕ ДОМЕНЫ ===");
+                AddLine("———— ДОПОЛНИТЕЛЬНЫЕ ДОМЕНЫ ————");
                 foreach (string domain in customDomains)
                 {
                     if (domain.Contains("vk.com") || domain.Contains("rutracker.org"))
@@ -571,7 +599,7 @@ namespace NetworkDiagnostic
                 }
             }
 
-            AddLine("\n=== ЗАКЛЮЧЕНИЕ ===");
+            AddLine("\n———— ЗАКЛЮЧЕНИЕ ————");
             AddLine("Выявлены блокировки YouTube и Telegram.");
             AddLine("Провайдер блокирует протоколы: VMESS, SHADOWSOCKS, WIREGUARD.");
             AddLine("Рекомендуется использовать VPN с протоколом VLESS или TROJAN.");
@@ -581,13 +609,30 @@ namespace NetworkDiagnostic
 
         private void AddLine(string text)
         {
-            report.AppendLine(text);
-            outputText.text = report.ToString();
-
-            if (scrollView != null)
+            if (UnityMainThreadDispatcher.Instance != null)
             {
-                Canvas.ForceUpdateCanvases();
-                scrollView.verticalNormalizedPosition = 0f;
+                UnityMainThreadDispatcher.Instance.Enqueue(() =>
+                {
+                    report.AppendLine(text);
+                    outputText.text = report.ToString();
+
+                    if (scrollView != null)
+                    {
+                        Canvas.ForceUpdateCanvases();
+                        scrollView.verticalNormalizedPosition = 0f;
+                    }
+                });
+            }
+            else
+            {
+                report.AppendLine(text);
+                outputText.text = report.ToString();
+
+                if (scrollView != null)
+                {
+                    Canvas.ForceUpdateCanvases();
+                    scrollView.verticalNormalizedPosition = 0f;
+                }
             }
         }
 
@@ -600,11 +645,25 @@ namespace NetworkDiagnostic
 
         private void UpdateProgress(int progress, string message)
         {
-            if (progressSlider != null)
-                progressSlider.value = progress;
+            if (UnityMainThreadDispatcher.Instance != null)
+            {
+                UnityMainThreadDispatcher.Instance.Enqueue(() =>
+                {
+                    if (progressSlider != null)
+                        progressSlider.value = progress;
 
-            if (progressText != null)
-                progressText.text = $"{progress}% - {message}";
+                    if (progressText != null)
+                        progressText.text = $"{progress}% - {message}";
+                });
+            }
+            else
+            {
+                if (progressSlider != null)
+                    progressSlider.value = progress;
+
+                if (progressText != null)
+                    progressText.text = $"{progress}% - {message}";
+            }
         }
 
         private void ShowLoading(bool show)

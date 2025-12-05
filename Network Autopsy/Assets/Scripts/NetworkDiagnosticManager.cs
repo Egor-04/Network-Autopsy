@@ -21,6 +21,8 @@ namespace NetworkDiagnostic
         [SerializeField] private Button saveButton;
         [SerializeField] private TMP_InputField domainInput;
         [SerializeField] private Button addDomainButton;
+        [SerializeField] private Button removeDomainButton;
+        [SerializeField] private Button showDomainsButton;
         [SerializeField] private ScrollRect scrollView;
 
         private StringBuilder report = new StringBuilder();
@@ -42,6 +44,12 @@ namespace NetworkDiagnostic
 
             if (addDomainButton != null)
                 addDomainButton.onClick.AddListener(AddCustomDomain);
+
+            if (removeDomainButton != null)
+                removeDomainButton.onClick.AddListener(RemoveCustomDomain);
+
+            if (showDomainsButton != null)
+                showDomainsButton.onClick.AddListener(ShowAllDomains);
 
             customDomains.Add("vk.com");
             customDomains.Add("rutracker.org");
@@ -90,6 +98,47 @@ namespace NetworkDiagnostic
             else
             {
                 AddLine($"Домен {domain} уже в списке");
+            }
+        }
+
+        public void RemoveCustomDomain()
+        {
+            if (string.IsNullOrWhiteSpace(domainInput.text))
+                return;
+
+            string domain = domainInput.text.Trim().ToLower();
+
+            if (!domain.Contains("."))
+            {
+                AddLine($"Ошибка: '{domain}' не является доменом");
+                return;
+            }
+
+            domain = RemoveProtocolAndWWW(domain);
+
+            if (customDomains.Contains(domain))
+            {
+                customDomains.Remove(domain);
+                AddLine($"Домен удалён: {domain}");
+                domainInput.text = "";
+            }
+            else
+            {
+                AddLine($"Домена {domain} нет в списке");
+            }
+        }
+
+        private void ShowAllDomains()
+        {
+            ClearOutput();
+            AddLine("ВАШ СПИСОК ДОМЕНОВ:");
+
+            if (customDomains.Count > 0)
+            {
+                foreach (string domain in customDomains)
+                {
+                    AddLine($"{domain}\n");
+                }
             }
         }
 
@@ -208,7 +257,6 @@ namespace NetworkDiagnostic
 
                 AddLine("\n—— ДОПОЛНИТЕЛЬНЫЕ ДОМЕНЫ ——");
 
-                // Используем неблокирующую проверку
                 yield return StartCoroutine(CheckDomainsNonBlocking(customDomains.ToArray()));
             }
 
@@ -220,11 +268,11 @@ namespace NetworkDiagnostic
             if (javaResult.Contains("YouTube: BLOCKED") || javaResult.Contains("Telegram: BLOCKED"))
             {
                 AddLine("Выявлены блокировки на уровне провайдера.");
-                AddLine("Рекомендуется использовать VPN.");
+                AddLine("По возможности использовать VPN (ЗАПРЕЩЕНО К РАСПРОСТРАНЕНИЮ В РФ)\n Использовать от зарегистрированных в РФ организаций).");
             }
             else if (javaResult.Contains("VPN: ACTIVE"))
             {
-                AddLine("VPN подключен. Блокировки обходятся.");
+                AddLine("Обнаружен VPN. Блокировки обходятся.");
             }
             else
             {
@@ -589,7 +637,7 @@ namespace NetworkDiagnostic
 
             if (customDomains.Count > 0)
             {
-                AddLine("———— ДОПОЛНИТЕЛЬНЫЕ ДОМЕНЫ ————");
+                AddLine("——— ДОПОЛНИТЕЛЬНЫЕ ДОМЕНЫ ———");
                 foreach (string domain in customDomains)
                 {
                     if (domain.Contains("vk.com") || domain.Contains("rutracker.org"))

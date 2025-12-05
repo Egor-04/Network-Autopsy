@@ -4,14 +4,14 @@
 
 <hr>
 
-### **RU** 🇷🇺
+### **RU**
 Плохое интернет-соединение? Или очередная блокировка от оператора? Хотите понять конкретную проблему и на каком уровне? Network Autopsy проводит проверку всех возможных систем.
 
 Приложение диагностики сетевого соединения и выявления точной причины. Выявление причин плохого интернет соединения, блокировок сетевых протоколов и многого другого.
 
 ---
 
-### **ENG** 🇬🇧
+### **ENG**
 Poor internet connection? Or another operator block? Want to understand the specific issue and its level? Network Autopsy checks all possible systems.
 
 Network connection usage and accurate connection establishment. Identifying the causes of poor internet connections, network protocol blockages, and much more.

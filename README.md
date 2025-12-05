@@ -20,8 +20,17 @@ Network connection usage and accurate connection establishment. Identifying the 
 
 <br>
 
-<img width="576" height="1280" alt="Network Autopsy Screenshot 1" src="https://github.com/user-attachments/assets/cab86b69-3f7f-4493-9ab5-2f834fb7a889" />
+![Uploading image.png…]()
 
 <br><br>
 
 <img width="576" height="1280" alt="Network Autopsy Screenshot 2" src="https://github.com/user-attachments/assets/4aa23cbc-6718-42f5-ac94-741675dfb397" />
+
+<br><br>
+
+![Uploading image.png…]()
+
+<br><br>
+
+
+![Uploading image.png…]()

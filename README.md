@@ -24,10 +24,6 @@ Network connection usage and accurate connection establishment. Identifying the 
 
 <br><br>
 
-<img width="576" height="1280" alt="Network Autopsy Screenshot 2" src="https://github.com/user-attachments/assets/4aa23cbc-6718-42f5-ac94-741675dfb397" />
-
-<br><br>
-
 ![Uploading image.png…]()
 
 <br><br>

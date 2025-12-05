@@ -17,4 +17,3 @@
 Poor internet connection? Or another operator block? Want to understand the specific issue and its level? Network Autopsy checks all possible systems.
 
 Network connection usage and accurate connection establishment. Identifying the causes of poor internet connections, network protocol blockages, and much more.
-
